@@ -47,14 +47,27 @@ class WaBackup:
     def __init__(self, gmail, password, android_id, celnumbr, oauth_token):
         master_token = None
         if oauth_token:
-            print("Exchanging web oauth_token to master token...")
-            token = gpsoauth.exchange_token(gmail, oauth_token, android_id)
-            if "Token" in token:
-                print("Granted.")
-                master_token = token['Token']
+            oauth_token = str(oauth_token).strip().strip('"').strip("'")
+            if oauth_token.startswith("oauth2rt_") or oauth_token.startswith("aas_et/"):
+                print("[+] Using existing Google master token...")
+                master_token = oauth_token
             else:
-                error(token)
-                quit()
+                print("[*] Exchanging web oauth_token to Google master token...")
+                token = gpsoauth.exchange_token(gmail, oauth_token, android_id)
+                if "Token" in token:
+                    print("[+] Access granted.")
+                    master_token = token['Token']
+                    try:
+                        cfg_file = r'{}/cfg/settings.cfg'.format(whapa_path).replace("/", os.path.sep)
+                        config = ConfigObj(cfg_file, interpolation=None)
+                        config['google-auth']['oauth'] = master_token
+                        config.write()
+                        print("[+] Saved master token to cfg/settings.cfg for faster access next time.")
+                    except Exception as e:
+                        pass
+                else:
+                    error(token)
+                    quit()
         else:
             print("Requesting access to Google...")
             token = gpsoauth.perform_master_login(email=gmail, password=password, android_id=android_id)
@@ -240,16 +253,27 @@ def createSettingsFile():
             """).lstrip())
 
 
-def getConfigs():
+def getConfigs(cli_args=None):
     cfg_file = r'{}/cfg/settings.cfg'.format(whapa_path).replace("/", os.path.sep)
     config = ConfigObj(cfg_file, interpolation=None)
     try:
-        gmail = config['google-auth']['gmail']
-        password = config['google-auth']['password']
-        celnumbr = config['google-auth']['celnumbr'].lstrip('+0')
-        oauth_token = config['google-auth']['oauth']
-        android_id = config['google-auth']['android_id']
-        if not password:
+        gmail = config['google-auth'].get('gmail', '')
+        password = config['google-auth'].get('password', '')
+        celnumbr = config['google-auth'].get('celnumbr', '').lstrip('+0')
+        oauth_token = config['google-auth'].get('oauth', '')
+        android_id = config['google-auth'].get('android_id', '0000000000000000')
+
+        if cli_args:
+            if hasattr(cli_args, 'email') and cli_args.email:
+                gmail = cli_args.email
+            if hasattr(cli_args, 'token') and cli_args.token:
+                oauth_token = cli_args.token
+            if hasattr(cli_args, 'phone') and cli_args.phone:
+                celnumbr = cli_args.phone.lstrip('+0')
+
+        if not oauth_token and not password:
+            if not gmail:
+                gmail = input("Inserisci la tua email Gmail: ")
             try:
                 password = getpass("Enter your password for {}: ".format(gmail))
             except KeyboardInterrupt:
@@ -314,21 +338,22 @@ def backup_info(backup):
 
 
 def error(token):
-    print("Failed")
+    print("[-] Autenticazione Fallita / Authentication Failed")
     print(token)
-    failed = token.get("Error")
+    failed = str(token.get("Error", ""))
     if "BadAuthentication" in failed:
-        print("\n   Workaround\n-----------------")
-        print(
-            "1. Check that your email and password are correct in the settings file.\n"
-            "2. Your are using a old python version. Works >= 3.8.\n"
-            "3. Update requirements, use in a terminal: 'pip3 install --upgrade -r ./doc/requirements.txt' or 'pip install --upgrade -r ./doc/requirements.txt\n"
-            "4. Your OAuth token configured in the settings file may have expired. The token will be deleted and you will have to log in again.")
-
-        cfg_file = r'{}/cfg/settings.cfg'.format(whapa_path).replace("/", os.path.sep)
-        config = ConfigObj(cfg_file, interpolation=None)
-        config['google-auth']['oauth'] = ""
-        config.write()
+        print("\n   [!] COME RISOLVERE / WORKAROUND:")
+        print("--------------------------------------------------------------------------------")
+        print("Google non consente piu l'accesso con email e password legacy.")
+        print("Per autenticarti correttamente con WhaGoDri:")
+        print("1. Nel tuo browser sul PC (con l'account Google connesso), apri:")
+        print("   https://accounts.google.com/EmbeddedSetup")
+        print("2. Premi F12 (Strumenti sviluppatore) -> scheda Applicazione/Storage -> Cookie")
+        print("   -> seleziona https://accounts.google.com")
+        print("3. Trova il cookie denominato 'oauth_token' e copia il suo valore.")
+        print("4. Incolla il valore in cfg/settings.cfg alla voce 'oauth = ...'")
+        print("   oppure esegui whagodri con il parametro: -t <TUO_OAUTH_TOKEN>")
+        print("--------------------------------------------------------------------------------\n")
 
     elif "NeedsBrowser" in failed:
         print("\n   Workaround\n-----------------")
@@ -616,6 +641,9 @@ if __name__ == "__main__":
     user_parser.add_argument("-sx", "--s_documents", help="Sync Documents files locally", action="store_true")
     user_parser.add_argument("-sd", "--s_databases", help="Sync Databases files locally", action="store_true")
     parser.add_argument("-o", "--output", help="Output path to save files", type=str)
+    parser.add_argument("-t", "--token", help="Google OAuth token or Master token", type=str)
+    parser.add_argument("-e", "--email", help="Google Gmail address", type=str)
+    parser.add_argument("-pn", "--phone", help="Phone number with country code", type=str)
     parser.add_argument("-np", "--no_parallel", help="No parallel downloads", action="store_true")
     parser.add_argument("-tc", "--thread_count", help="Number of threads if parallel download", type=int, default=12)
     parser.add_argument("-dr", "--dry_run", help="Dry Run : No downloads", action="store_true")
@@ -630,7 +658,7 @@ if __name__ == "__main__":
 
     else:
         print("[i] Searching...\n")
-        wa_backup = WaBackup(**getConfigs())
+        wa_backup = WaBackup(**getConfigs(args))
         backups = wa_backup.backups()
         try:
             if args.info:

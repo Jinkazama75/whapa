@@ -12,14 +12,20 @@ from urllib3.util import ssl_
 
 from . import google
 
-__version__ = version(__package__)
+try:
+    __version__ = version(__package__ or "gpsoauth")
+except Exception:
+    __version__ = "2.0.0"
 
 SSL_DEFAULT_CIPHERS = None
-if version("urllib3") < "2.0.0a1":
-    # pylint: disable-next=no-name-in-module
-    from urllib3.util.ssl_ import DEFAULT_CIPHERS
+try:
+    if version("urllib3") < "2.0.0a1":
+        # pylint: disable-next=no-name-in-module
+        from urllib3.util.ssl_ import DEFAULT_CIPHERS
 
-    SSL_DEFAULT_CIPHERS = DEFAULT_CIPHERS
+        SSL_DEFAULT_CIPHERS = DEFAULT_CIPHERS
+except Exception:
+    pass
 
 # The key is distirbuted with Google Play Services.
 # This one is from version 7.3.29.
