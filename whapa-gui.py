@@ -709,9 +709,11 @@ class WhapaGUI(ctk.CTk):
         self.var_prof_name = ctk.StringVar()
         self.var_prof_phone = ctk.StringVar()
         self.var_prof_gmail = ctk.StringVar()
+        self.var_prof_pass = ctk.StringVar()
         self.var_prof_oauth = ctk.StringVar()
         self.var_prof_dir = ctk.StringVar()
         self.oauth_visible = False
+        self.pass_visible = False
         self.var_prof_oauth.trace_add("write", lambda *args: self._update_token_badge())
         self.var_prof_dir.trace_add("write", lambda *args: self._on_profile_dir_changed())
 
@@ -826,6 +828,7 @@ class WhapaGUI(ctk.CTk):
                 self.var_prof_name.set(act_prof.get("name", ""))
                 self.var_prof_phone.set(act_prof.get("phone", ""))
                 self.var_prof_gmail.set(act_prof.get("gmail", ""))
+                self.var_prof_pass.set(act_prof.get("password", ""))
                 self.var_prof_oauth.set(act_prof.get("oauth", ""))
                 self.var_prof_dir.set(act_prof.get("output_dir", ""))
 
@@ -848,6 +851,7 @@ class WhapaGUI(ctk.CTk):
 
         phone = self.var_prof_phone.get().strip().replace("+", "").replace(" ", "").replace("-", "")
         gmail = self.var_prof_gmail.get().strip()
+        password = self.var_prof_pass.get().strip()
         oauth = self.var_prof_oauth.get().strip()
         out_dir = self.var_prof_dir.get().strip()
         if not out_dir:
@@ -860,8 +864,8 @@ class WhapaGUI(ctk.CTk):
             "name": nome,
             "phone": phone,
             "gmail": gmail,
+            "password": password,
             "oauth": oauth,
-            "password": act_prof.get("password", ""),
             "android_id": act_prof.get("android_id", "0000000000000000"),
             "output_dir": out_dir
         }
@@ -869,6 +873,18 @@ class WhapaGUI(ctk.CTk):
         self._refresh_profile_ui(skip_fields=True)
         if not silent:
             self._emit(f"[+] Profilo '{nome}' salvato con successo.", "ok")
+
+    def _toggle_pass_visibility(self):
+        self.pass_visible = not self.pass_visible
+        if hasattr(self, "entry_prof_pass"):
+            if self.pass_visible:
+                self.entry_prof_pass.configure(show="")
+                if hasattr(self, "btn_toggle_pass"):
+                    self.btn_toggle_pass.configure(text="🔒")
+            else:
+                self.entry_prof_pass.configure(show="*")
+                if hasattr(self, "btn_toggle_pass"):
+                    self.btn_toggle_pass.configure(text="👁️")
 
     def _toggle_oauth_visibility(self):
         self.oauth_visible = not self.oauth_visible
@@ -921,8 +937,8 @@ class WhapaGUI(ctk.CTk):
             "name": nome,
             "phone": "",
             "gmail": "",
-            "oauth": "",
             "password": "",
+            "oauth": "",
             "android_id": "0000000000000000",
             "output_dir": os.path.join(APP_DIR, "downloads", nome)
         }
@@ -1052,65 +1068,90 @@ class WhapaGUI(ctk.CTk):
         # --- Campi Editabili Direttamente Sotto la Tendina ---
         fields_box = ctk.CTkFrame(profile_frame, fg_color=FIELD, corner_radius=8, border_color=FIELD_BORDER, border_width=1)
         fields_box.pack(fill="x", padx=14, pady=(2, 8))
-        fields_box.grid_columnconfigure(0, weight=2)
-        fields_box.grid_columnconfigure(1, weight=2)
-        fields_box.grid_columnconfigure(2, weight=3)
-        fields_box.grid_columnconfigure(3, weight=4)
+        fields_box.grid_columnconfigure(0, weight=1)
+        fields_box.grid_columnconfigure(1, weight=1)
 
-        # Riga 0: Nome, Telefono, Gmail, Token OAuth
-        f_name = ctk.CTkFrame(fields_box, fg_color="transparent")
-        f_name.grid(row=0, column=0, sticky="ew", padx=(8, 4), pady=(6, 4))
-        ctk.CTkLabel(f_name, text="🏷️ Nome Profilo", text_color=MUTED, font=ctk.CTkFont(**F10)).pack(anchor="w")
-        self.entry_prof_name = ctk.CTkEntry(f_name, textvariable=self.var_prof_name, height=28,
-                                            fg_color=PANEL, border_color=PANEL_BORDER, corner_radius=6, font=ctk.CTkFont(**F11))
-        self.entry_prof_name.pack(fill="x", pady=(2, 0))
-        self.entry_prof_name.bind("<Return>", lambda e: self._save_current_profile())
+        # =====================================================================
+        # COLONNA SINISTRA: I 3 VALORI NECESSARI DELL'ACCOUNT (Gmail, Password, Token)
+        # =====================================================================
+        f_left = ctk.CTkFrame(fields_box, fg_color="transparent")
+        f_left.grid(row=0, column=0, sticky="nsew", padx=(12, 10), pady=8)
+        f_left.grid_columnconfigure(0, weight=0)
+        f_left.grid_columnconfigure(1, weight=1)
 
-        f_phone = ctk.CTkFrame(fields_box, fg_color="transparent")
-        f_phone.grid(row=0, column=1, sticky="ew", padx=4, pady=(6, 4))
-        ctk.CTkLabel(f_phone, text="📱 Numero WhatsApp", text_color=MUTED, font=ctk.CTkFont(**F10)).pack(anchor="w")
-        self.entry_prof_phone = ctk.CTkEntry(f_phone, textvariable=self.var_prof_phone, height=28,
+        # 1. Email Google (Gmail)
+        ctk.CTkLabel(f_left, text="✉️ Email Google:", text_color=TEXT,
+                     font=ctk.CTkFont(**F11), anchor="w").grid(row=0, column=0, sticky="w", padx=(0, 8), pady=4)
+        self.entry_prof_gmail = ctk.CTkEntry(f_left, textvariable=self.var_prof_gmail, height=28,
                                              fg_color=PANEL, border_color=PANEL_BORDER, corner_radius=6, font=ctk.CTkFont(**F11))
-        self.entry_prof_phone.pack(fill="x", pady=(2, 0))
-        self.entry_prof_phone.bind("<Return>", lambda e: self._save_current_profile())
-
-        f_gmail = ctk.CTkFrame(fields_box, fg_color="transparent")
-        f_gmail.grid(row=0, column=2, sticky="ew", padx=4, pady=(6, 4))
-        ctk.CTkLabel(f_gmail, text="✉️ Email Google (Gmail)", text_color=MUTED, font=ctk.CTkFont(**F10)).pack(anchor="w")
-        self.entry_prof_gmail = ctk.CTkEntry(f_gmail, textvariable=self.var_prof_gmail, height=28,
-                                             fg_color=PANEL, border_color=PANEL_BORDER, corner_radius=6, font=ctk.CTkFont(**F11))
-        self.entry_prof_gmail.pack(fill="x", pady=(2, 0))
+        self.entry_prof_gmail.grid(row=0, column=1, sticky="ew", pady=4)
         self.entry_prof_gmail.bind("<Return>", lambda e: self._save_current_profile())
 
-        f_oauth = ctk.CTkFrame(fields_box, fg_color="transparent")
-        f_oauth.grid(row=0, column=3, sticky="ew", padx=(4, 8), pady=(6, 4))
-        ctk.CTkLabel(f_oauth, text="🔑 Token OAuth / Master Token", text_color=MUTED, font=ctk.CTkFont(**F10)).pack(anchor="w")
-        oauth_row = ctk.CTkFrame(f_oauth, fg_color="transparent")
-        oauth_row.pack(fill="x", pady=(2, 0))
+        # 2. Password Google (Nascosta ma Modificabile, con occhio per mostrare/nascondere)
+        ctk.CTkLabel(f_left, text="🔒 Password Google:", text_color=TEXT,
+                     font=ctk.CTkFont(**F11), anchor="w").grid(row=1, column=0, sticky="w", padx=(0, 8), pady=4)
+        pass_row = ctk.CTkFrame(f_left, fg_color="transparent")
+        pass_row.grid(row=1, column=1, sticky="ew", pady=4)
+        self.entry_prof_pass = ctk.CTkEntry(pass_row, textvariable=self.var_prof_pass, show="*", height=28,
+                                            fg_color=PANEL, border_color=PANEL_BORDER, corner_radius=6, font=ctk.CTkFont(**F11))
+        self.entry_prof_pass.pack(side="left", fill="x", expand=True, padx=(0, 4))
+        self.entry_prof_pass.bind("<Return>", lambda e: self._save_current_profile())
+        self.btn_toggle_pass = ctk.CTkButton(pass_row, text="👁️", width=34, height=28,
+                                             command=self._toggle_pass_visibility,
+                                             fg_color=BUTTON_SEC, hover_color=BUTTON_SEC_HOVER, corner_radius=6)
+        self.btn_toggle_pass.pack(side="right")
+
+        # 3. Token OAuth / Master Token (Nascosto ma Modificabile, con occhio)
+        ctk.CTkLabel(f_left, text="🔑 Token OAuth / Master:", text_color=TEXT,
+                     font=ctk.CTkFont(**F11), anchor="w").grid(row=2, column=0, sticky="w", padx=(0, 8), pady=4)
+        oauth_row = ctk.CTkFrame(f_left, fg_color="transparent")
+        oauth_row.grid(row=2, column=1, sticky="ew", pady=4)
         self.entry_prof_oauth = ctk.CTkEntry(oauth_row, textvariable=self.var_prof_oauth, height=28, show="*",
                                              fg_color=PANEL, border_color=PANEL_BORDER, corner_radius=6, font=ctk.CTkFont(**F11))
         self.entry_prof_oauth.pack(side="left", fill="x", expand=True, padx=(0, 4))
         self.entry_prof_oauth.bind("<Return>", lambda e: self._save_current_profile())
-        self.btn_toggle_oauth = ctk.CTkButton(oauth_row, text="👁️", width=32, height=28,
+        self.btn_toggle_oauth = ctk.CTkButton(oauth_row, text="👁️", width=34, height=28,
                                               command=self._toggle_oauth_visibility,
                                               fg_color=BUTTON_SEC, hover_color=BUTTON_SEC_HOVER, corner_radius=6)
         self.btn_toggle_oauth.pack(side="right")
 
-        # Riga 1: Cartella di download dedicata + pulsante Sfoglia
-        f_dir = ctk.CTkFrame(fields_box, fg_color="transparent")
-        f_dir.grid(row=1, column=0, columnspan=4, sticky="ew", padx=8, pady=(2, 8))
-        f_dir.grid_columnconfigure(1, weight=1)
+        # =====================================================================
+        # COLONNA DESTRA: NOME, TELEFONO WHATSAPP, CARTELLA DOWNLOAD
+        # =====================================================================
+        f_right = ctk.CTkFrame(fields_box, fg_color="transparent")
+        f_right.grid(row=0, column=1, sticky="nsew", padx=(10, 12), pady=8)
+        f_right.grid_columnconfigure(0, weight=0)
+        f_right.grid_columnconfigure(1, weight=1)
 
-        ctk.CTkLabel(f_dir, text="📁 Cartella Download:", text_color=MUTED, font=ctk.CTkFont(**F10)).grid(row=0, column=0, sticky="w", padx=(0, 8))
-        self.entry_prof_dir = ctk.CTkEntry(f_dir, textvariable=self.var_prof_dir, height=28,
+        # 1. Nome Profilo
+        ctk.CTkLabel(f_right, text="🏷️ Nome Profilo:", text_color=TEXT,
+                     font=ctk.CTkFont(**F11), anchor="w").grid(row=0, column=0, sticky="w", padx=(0, 8), pady=4)
+        self.entry_prof_name = ctk.CTkEntry(f_right, textvariable=self.var_prof_name, height=28,
+                                            fg_color=PANEL, border_color=PANEL_BORDER, corner_radius=6, font=ctk.CTkFont(**F11))
+        self.entry_prof_name.grid(row=0, column=1, sticky="ew", pady=4)
+        self.entry_prof_name.bind("<Return>", lambda e: self._save_current_profile())
+
+        # 2. Numero WhatsApp
+        ctk.CTkLabel(f_right, text="📱 Telefono WhatsApp:", text_color=TEXT,
+                     font=ctk.CTkFont(**F11), anchor="w").grid(row=1, column=0, sticky="w", padx=(0, 8), pady=4)
+        self.entry_prof_phone = ctk.CTkEntry(f_right, textvariable=self.var_prof_phone, height=28,
+                                             fg_color=PANEL, border_color=PANEL_BORDER, corner_radius=6, font=ctk.CTkFont(**F11))
+        self.entry_prof_phone.grid(row=1, column=1, sticky="ew", pady=4)
+        self.entry_prof_phone.bind("<Return>", lambda e: self._save_current_profile())
+
+        # 3. Cartella Download
+        ctk.CTkLabel(f_right, text="📁 Cartella Download:", text_color=TEXT,
+                     font=ctk.CTkFont(**F11), anchor="w").grid(row=2, column=0, sticky="w", padx=(0, 8), pady=4)
+        dir_row = ctk.CTkFrame(f_right, fg_color="transparent")
+        dir_row.grid(row=2, column=1, sticky="ew", pady=4)
+        self.entry_prof_dir = ctk.CTkEntry(dir_row, textvariable=self.var_prof_dir, height=28,
                                            fg_color=PANEL, border_color=PANEL_BORDER, corner_radius=6, font=ctk.CTkFont(**F11))
-        self.entry_prof_dir.grid(row=0, column=1, sticky="ew", padx=(0, 6))
+        self.entry_prof_dir.pack(side="left", fill="x", expand=True, padx=(0, 4))
         self.entry_prof_dir.bind("<Return>", lambda e: self._save_current_profile())
-
-        ctk.CTkButton(f_dir, text="📁 Sfoglia...", width=95, height=28,
+        ctk.CTkButton(dir_row, text="📁 Sfoglia", width=75, height=28,
                       command=self._browse_profile_folder,
                       fg_color=BUTTON_SEC, hover_color=BUTTON_SEC_HOVER,
-                      corner_radius=6, font=ctk.CTkFont(**F11)).grid(row=0, column=2, sticky="e")
+                      corner_radius=6, font=ctk.CTkFont(**F11)).pack(side="right")
 
         # ===================================================================
         # Row 2: Schede principali dell'applicazione
