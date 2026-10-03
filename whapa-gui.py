@@ -714,8 +714,11 @@ class WhapaGUI(ctk.CTk):
         self.var_prof_dir = ctk.StringVar()
         self.oauth_visible = False
         self.pass_visible = False
+        self._suppress_dir_auto_update = False
         self.var_prof_oauth.trace_add("write", lambda *args: self._update_token_badge())
         self.var_prof_dir.trace_add("write", lambda *args: self._on_profile_dir_changed())
+        self.var_prof_name.trace_add("write", lambda *args: self._on_name_or_phone_changed())
+        self.var_prof_phone.trace_add("write", lambda *args: self._on_name_or_phone_changed())
 
         # Rilevamento automatico browser installati
         self.installed_browsers = get_installed_browsers()
@@ -809,6 +812,22 @@ class WhapaGUI(ctk.CTk):
                     text_color="#FFA726"
                 )
 
+    def _on_name_or_phone_changed(self):
+        if getattr(self, "_suppress_dir_auto_update", False):
+            return
+        cur_dir = self.var_prof_dir.get().strip()
+        default_base = os.path.join(APP_DIR, "downloads")
+        # Aggiorna automaticamente la cartella se vuota o se si trova dentro la cartella downloads predefinita
+        if not cur_dir or cur_dir.startswith(default_base):
+            nome = self.var_prof_name.get().strip()
+            phone = self.var_prof_phone.get().strip().replace("+", "").replace(" ", "").replace("-", "")
+            clean_n = "".join(c for c in nome if c.isalnum() or c in ("_", "-"))
+            if not clean_n:
+                clean_n = "Nuovo"
+            folder_name = f"{clean_n}_{phone}" if phone else clean_n
+            new_path = os.path.join(default_base, folder_name)
+            self.var_prof_dir.set(new_path)
+
     def _refresh_profile_ui(self, skip_fields=False):
         values = self._get_profile_display_names()
         act_prof = self.profile_manager.get_active_profile()
@@ -825,12 +844,16 @@ class WhapaGUI(ctk.CTk):
             self.title(f"WhaPa v{VERSION} - [Profilo: {p_name}{phone_str}] - Suite Forense & Backup WhatsApp")
 
             if not skip_fields:
-                self.var_prof_name.set(act_prof.get("name", ""))
-                self.var_prof_phone.set(act_prof.get("phone", ""))
-                self.var_prof_gmail.set(act_prof.get("gmail", ""))
-                self.var_prof_pass.set(act_prof.get("password", ""))
-                self.var_prof_oauth.set(act_prof.get("oauth", ""))
-                self.var_prof_dir.set(act_prof.get("output_dir", ""))
+                self._suppress_dir_auto_update = True
+                try:
+                    self.var_prof_name.set(act_prof.get("name", ""))
+                    self.var_prof_phone.set(act_prof.get("phone", ""))
+                    self.var_prof_gmail.set(act_prof.get("gmail", ""))
+                    self.var_prof_pass.set(act_prof.get("password", ""))
+                    self.var_prof_oauth.set(act_prof.get("oauth", ""))
+                    self.var_prof_dir.set(act_prof.get("output_dir", ""))
+                finally:
+                    self._suppress_dir_auto_update = False
 
             self._update_token_badge()
 
@@ -859,6 +882,19 @@ class WhapaGUI(ctk.CTk):
             out_dir = os.path.join(APP_DIR, "downloads", f"{clean_n}_{phone}" if phone else clean_n)
             self.var_prof_dir.set(out_dir)
 
+        # Rinomina la cartella fisica su disco se il nome o numero sono cambiati e la cartella precedente esiste
+        old_dir = act_prof.get("output_dir", "")
+        if old_dir and os.path.exists(old_dir) and os.path.normpath(old_dir) != os.path.normpath(out_dir):
+            try:
+                os.makedirs(os.path.dirname(out_dir), exist_ok=True)
+                if not os.path.exists(out_dir):
+                    os.rename(old_dir, out_dir)
+                    self._emit(f"[-] Cartella download rinominata sul disco: '{os.path.basename(old_dir)}' ➔ '{os.path.basename(out_dir)}'", "ok")
+                else:
+                    self._emit(f"[-] Cartella '{os.path.basename(out_dir)}' già presente sul disco.", "cmd")
+            except Exception as e:
+                self._emit(f"[avviso] Impossibile rinominare la cartella: {e}", "err")
+
         p_data = {
             "id": act_prof.get("id"),
             "name": nome,
@@ -872,7 +908,8 @@ class WhapaGUI(ctk.CTk):
         self.profile_manager.save_profile(p_data)
         self._refresh_profile_ui(skip_fields=True)
         if not silent:
-            self._emit(f"[+] Profilo '{nome}' salvato con successo.", "ok")
+            num_display = f" (+{phone})" if phone else ""
+            self._emit(f"[+] Profilo '{nome}{num_display}' e cartella salvati con successo.", "ok")
 
     def _toggle_pass_visibility(self):
         self.pass_visible = not self.pass_visible
@@ -1022,7 +1059,7 @@ class WhapaGUI(ctk.CTk):
             variable=self.selected_profile_name,
             values=self._get_profile_display_names(),
             command=self._on_profile_dropdown_changed,
-            width=260, height=30,
+            width=250, height=30,
             fg_color=BUTTON_SEC, button_color=BUTTON_SEC_HOVER,
             button_hover_color=ACCENT_HOVER,
             corner_radius=8, font=ctk.CTkFont(**F11),
@@ -1030,7 +1067,7 @@ class WhapaGUI(ctk.CTk):
         )
         self.profile_menu.pack(side="left", padx=(0, 8))
 
-        ctk.CTkButton(p_top_left, text="💾 Salva Modifiche", width=140, height=30,
+        ctk.CTkButton(p_top_left, text="💾 Salva Modifiche", width=135, height=30,
                       command=self._save_current_profile,
                       fg_color=ACCENT, hover_color=ACCENT_HOVER, text_color="#0B141A",
                       corner_radius=8, font=ctk.CTkFont(**F11_BOLD)).pack(side="left", padx=(0, 6))
