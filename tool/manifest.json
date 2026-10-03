@@ -1,0 +1,26 @@
+{
+  "manifest_version": 3,
+  "name": "WhaPa Token Helper",
+  "version": "1.0",
+  "description": "Legge e copia il valore oauth_token di Google per WhaPa",
+  "permissions": [
+    "cookies"
+  ],
+  "host_permissions": [
+    "*://accounts.google.com/*"
+  ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "WhaPa Token Helper",
+    "default_icon": "icon.png"
+  },
+  "icons": {
+    "48": "icon.png",
+    "128": "icon.png"
+  },
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "whapa-token-helper@local"
+    }
+  }
+}
