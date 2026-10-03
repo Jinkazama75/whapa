@@ -706,6 +706,14 @@ class WhapaGUI(ctk.CTk):
         # Inizializza Gestore Profili
         self.profile_manager = ProfileManager()
         self.selected_profile_name = ctk.StringVar()
+        self.var_prof_name = ctk.StringVar()
+        self.var_prof_phone = ctk.StringVar()
+        self.var_prof_gmail = ctk.StringVar()
+        self.var_prof_oauth = ctk.StringVar()
+        self.var_prof_dir = ctk.StringVar()
+        self.oauth_visible = False
+        self.var_prof_oauth.trace_add("write", lambda *args: self._update_token_badge())
+        self.var_prof_dir.trace_add("write", lambda *args: self._on_profile_dir_changed())
 
         # Rilevamento automatico browser installati
         self.installed_browsers = get_installed_browsers()
@@ -777,7 +785,29 @@ class WhapaGUI(ctk.CTk):
                 return p
         return None
 
-    def _refresh_profile_ui(self):
+    def _on_profile_dir_changed(self):
+        if hasattr(self, "g_out"):
+            p_dir = self.var_prof_dir.get().strip()
+            if p_dir:
+                self.g_out.set(p_dir)
+
+    def _update_token_badge(self):
+        if hasattr(self, "lbl_token_badge"):
+            has_tok = bool(self.var_prof_oauth.get().strip())
+            if has_tok:
+                self.lbl_token_badge.configure(
+                    text="🟢 Token Connesso",
+                    fg_color=ACCENT_MUTED,
+                    text_color=ACCENT
+                )
+            else:
+                self.lbl_token_badge.configure(
+                    text="⚠️ Token Mancante",
+                    fg_color="#3B2A1A",
+                    text_color="#FFA726"
+                )
+
+    def _refresh_profile_ui(self, skip_fields=False):
         values = self._get_profile_display_names()
         act_prof = self.profile_manager.get_active_profile()
         current_name = self._get_display_name_for_profile(act_prof) if act_prof else (values[0] if values else "")
@@ -787,48 +817,82 @@ class WhapaGUI(ctk.CTk):
             self.selected_profile_name.set(current_name)
 
         if act_prof:
-            # Aggiorna il titolo della finestra con il profilo attivo
             p_name = act_prof.get("name", "Profilo")
             phone = act_prof.get("phone", "")
             phone_str = f" (+{phone})" if phone else ""
             self.title(f"WhaPa v{VERSION} - [Profilo: {p_name}{phone_str}] - Suite Forense & Backup WhatsApp")
 
-            # Aggiorna badge e campi informativi
-            if hasattr(self, "lbl_profile_phone"):
-                self.lbl_profile_phone.configure(text=f"📱 Telefono: {('+' + phone) if phone else 'Non specificato'}")
+            if not skip_fields:
+                self.var_prof_name.set(act_prof.get("name", ""))
+                self.var_prof_phone.set(act_prof.get("phone", ""))
+                self.var_prof_gmail.set(act_prof.get("gmail", ""))
+                self.var_prof_oauth.set(act_prof.get("oauth", ""))
+                self.var_prof_dir.set(act_prof.get("output_dir", ""))
 
-            if hasattr(self, "lbl_profile_email"):
-                gmail = act_prof.get("gmail", "")
-                self.lbl_profile_email.configure(text=f"✉️ Google: {gmail if gmail else 'Non specificato'}")
+            self._update_token_badge()
 
-            out_d = act_prof.get("output_dir", "")
-            if hasattr(self, "lbl_profile_folder"):
-                self.lbl_profile_folder.configure(text=f"📁 Destinazione: {out_d if out_d else 'Predefinita'}")
+            out_d = self.var_prof_dir.get().strip() or act_prof.get("output_dir", "")
+            if hasattr(self, "g_out") and out_d:
+                self.g_out.set(out_d)
 
-            if hasattr(self, "lbl_token_badge"):
-                has_token = bool(act_prof.get("oauth", "").strip())
-                if has_token:
-                    self.lbl_token_badge.configure(
-                        text="🟢 Token Google Configurato",
-                        fg_color=ACCENT_MUTED,
-                        text_color=ACCENT
-                    )
-                else:
-                    self.lbl_token_badge.configure(
-                        text="⚠️ Token Google Mancante",
-                        fg_color="#3B2A1A",
-                        text_color="#FFA726"
-                    )
+    def _save_current_profile(self, silent=False):
+        act_prof = self.profile_manager.get_active_profile()
+        if not act_prof:
+            return
 
-            if hasattr(self, "g_out"):
-                if out_d:
-                    self.g_out.set(out_d)
+        nome = self.var_prof_name.get().strip()
+        if not nome:
+            if not silent:
+                messagebox.showwarning("Dati Mancanti", "Inserisci un nome o etichetta per il profilo.")
+            return
+
+        phone = self.var_prof_phone.get().strip().replace("+", "").replace(" ", "").replace("-", "")
+        gmail = self.var_prof_gmail.get().strip()
+        oauth = self.var_prof_oauth.get().strip()
+        out_dir = self.var_prof_dir.get().strip()
+        if not out_dir:
+            clean_n = "".join(c for c in nome if c.isalnum() or c in ("_", "-"))
+            out_dir = os.path.join(APP_DIR, "downloads", f"{clean_n}_{phone}" if phone else clean_n)
+            self.var_prof_dir.set(out_dir)
+
+        p_data = {
+            "id": act_prof.get("id"),
+            "name": nome,
+            "phone": phone,
+            "gmail": gmail,
+            "oauth": oauth,
+            "password": act_prof.get("password", ""),
+            "android_id": act_prof.get("android_id", "0000000000000000"),
+            "output_dir": out_dir
+        }
+        self.profile_manager.save_profile(p_data)
+        self._refresh_profile_ui(skip_fields=True)
+        if not silent:
+            self._emit(f"[+] Profilo '{nome}' salvato con successo.", "ok")
+
+    def _toggle_oauth_visibility(self):
+        self.oauth_visible = not self.oauth_visible
+        if hasattr(self, "entry_prof_oauth"):
+            if self.oauth_visible:
+                self.entry_prof_oauth.configure(show="")
+                if hasattr(self, "btn_toggle_oauth"):
+                    self.btn_toggle_oauth.configure(text="🔒")
+            else:
+                self.entry_prof_oauth.configure(show="*")
+                if hasattr(self, "btn_toggle_oauth"):
+                    self.btn_toggle_oauth.configure(text="👁️")
+
+    def _browse_profile_folder(self):
+        initial = self.var_prof_dir.get().strip() or os.path.join(APP_DIR, "downloads")
+        p = filedialog.askdirectory(title="Seleziona Cartella di Download", initialdir=initial)
+        if p:
+            self.var_prof_dir.set(p)
 
     def _open_active_profile_folder(self):
         act_prof = self.profile_manager.get_active_profile()
         if not act_prof:
             return
-        out_dir = act_prof.get("output_dir", "")
+        out_dir = self.var_prof_dir.get().strip() or act_prof.get("output_dir", "")
         if not out_dir:
             out_dir = os.path.join(APP_DIR, "downloads")
         try:
@@ -841,21 +905,32 @@ class WhapaGUI(ctk.CTk):
             messagebox.showerror("WhaPa", f"Impossibile aprire la cartella: {e}")
 
     def _on_profile_dropdown_changed(self, choice):
+        self._save_current_profile(silent=True)
         prof = self._find_profile_by_display_name(choice)
         if prof:
             self.profile_manager.set_active_profile(prof["id"])
-            self._refresh_profile_ui()
+            self._refresh_profile_ui(skip_fields=False)
             num_str = f"+{prof.get('phone')}" if prof.get('phone') else "non impostato"
-            self._emit(f"[-] Profilo attivo selezionato: {prof['name']} (Numero: {num_str})", "ok")
+            self._emit(f"[-] Caricato profilo: {prof['name']} (Numero: {num_str})", "ok")
 
     def _new_profile(self):
-        ProfileDialog(self, profile={})
-
-    def _edit_profile(self):
-        act_prof = self.profile_manager.get_active_profile()
-        if not act_prof:
-            return messagebox.showwarning("WhaPa", "Nessun profilo selezionato.")
-        ProfileDialog(self, profile=dict(act_prof))
+        self._save_current_profile(silent=True)
+        num_existing = len(self.profile_manager.get_profiles()) + 1
+        nome = f"Account {num_existing}"
+        nuovo = {
+            "name": nome,
+            "phone": "",
+            "gmail": "",
+            "oauth": "",
+            "password": "",
+            "android_id": "0000000000000000",
+            "output_dir": os.path.join(APP_DIR, "downloads", nome)
+        }
+        self.profile_manager.save_profile(nuovo)
+        self._refresh_profile_ui(skip_fields=False)
+        self._emit(f"[+] Creato '{nome}'. Modifica i campi direttamente qui sotto e premi Salva Modifiche.", "ok")
+        if hasattr(self, "entry_prof_name"):
+            self.entry_prof_name.focus_set()
 
     def _delete_profile(self):
         act_prof = self.profile_manager.get_active_profile()
@@ -870,7 +945,7 @@ class WhapaGUI(ctk.CTk):
 
         ok, msg = self.profile_manager.delete_profile(act_prof["id"])
         if ok:
-            self._refresh_profile_ui()
+            self._refresh_profile_ui(skip_fields=False)
             self._emit(f"[-] {msg}", "ok")
         else:
             messagebox.showerror("WhaPa", msg)
@@ -911,19 +986,19 @@ class WhapaGUI(ctk.CTk):
                           corner_radius=8, font=ctk.CTkFont(**F11)).pack(side="right", padx=4)
 
         # ===================================================================
-        # Row 1: Barra Gestione Profili Account (Sempre visibile in cima)
+        # Row 1: Gestione Profili Account - Editabile Direttamente Sotto la Tendina
         # ===================================================================
         profile_frame = ctk.CTkFrame(self, fg_color=PANEL, corner_radius=10, border_color=PANEL_BORDER, border_width=1)
         profile_frame.grid(row=1, column=0, sticky="ew", padx=18, pady=(2, 6))
 
-        # Riga 1: Selettore, pulsanti e indicatori
+        # --- Barra Selezione e Azioni Rapide ---
         p_top = ctk.CTkFrame(profile_frame, fg_color="transparent")
         p_top.pack(fill="x", padx=14, pady=(8, 4))
 
         p_top_left = ctk.CTkFrame(p_top, fg_color="transparent")
         p_top_left.pack(side="left")
 
-        ctk.CTkLabel(p_top_left, text="👤 Profilo:", text_color=ACCENT,
+        ctk.CTkLabel(p_top_left, text="👤 Profilo Account:", text_color=ACCENT,
                      font=ctk.CTkFont(**F12_BOLD)).pack(side="left", padx=(0, 8))
 
         self.profile_menu = ctk.CTkOptionMenu(
@@ -939,13 +1014,13 @@ class WhapaGUI(ctk.CTk):
         )
         self.profile_menu.pack(side="left", padx=(0, 8))
 
-        ctk.CTkButton(p_top_left, text="➕ Nuovo", width=85, height=30,
-                      command=self._new_profile,
+        ctk.CTkButton(p_top_left, text="💾 Salva Modifiche", width=140, height=30,
+                      command=self._save_current_profile,
                       fg_color=ACCENT, hover_color=ACCENT_HOVER, text_color="#0B141A",
                       corner_radius=8, font=ctk.CTkFont(**F11_BOLD)).pack(side="left", padx=(0, 6))
 
-        ctk.CTkButton(p_top_left, text="✏️ Modifica", width=85, height=30,
-                      command=self._edit_profile,
+        ctk.CTkButton(p_top_left, text="➕ Nuovo Profilo", width=120, height=30,
+                      command=self._new_profile,
                       fg_color=BUTTON_SEC, hover_color=BUTTON_SEC_HOVER,
                       corner_radius=8, font=ctk.CTkFont(**F11)).pack(side="left", padx=(0, 6))
 
@@ -958,7 +1033,7 @@ class WhapaGUI(ctk.CTk):
         p_top_right.pack(side="right")
 
         self.lbl_token_badge = ctk.CTkLabel(
-            p_top_right, text="🟢 Token Google Configurato",
+            p_top_right, text="🟢 Token Connesso",
             fg_color=ACCENT_MUTED, text_color=ACCENT,
             corner_radius=8, font=ctk.CTkFont(**F11_BOLD),
             padx=10, pady=4
@@ -974,18 +1049,68 @@ class WhapaGUI(ctk.CTk):
         )
         self.btn_open_profile_dir.pack(side="left")
 
-        # Riga 2: Dettagli informativi del profilo attivo
-        p_details = ctk.CTkFrame(profile_frame, fg_color=FIELD, corner_radius=8)
-        p_details.pack(fill="x", padx=14, pady=(2, 8))
+        # --- Campi Editabili Direttamente Sotto la Tendina ---
+        fields_box = ctk.CTkFrame(profile_frame, fg_color=FIELD, corner_radius=8, border_color=FIELD_BORDER, border_width=1)
+        fields_box.pack(fill="x", padx=14, pady=(2, 8))
+        fields_box.grid_columnconfigure(0, weight=2)
+        fields_box.grid_columnconfigure(1, weight=2)
+        fields_box.grid_columnconfigure(2, weight=3)
+        fields_box.grid_columnconfigure(3, weight=4)
 
-        self.lbl_profile_phone = ctk.CTkLabel(p_details, text="📱 Telefono: --", text_color=TEXT, font=ctk.CTkFont(**F11))
-        self.lbl_profile_phone.pack(side="left", padx=(12, 16), pady=4)
+        # Riga 0: Nome, Telefono, Gmail, Token OAuth
+        f_name = ctk.CTkFrame(fields_box, fg_color="transparent")
+        f_name.grid(row=0, column=0, sticky="ew", padx=(8, 4), pady=(6, 4))
+        ctk.CTkLabel(f_name, text="🏷️ Nome Profilo", text_color=MUTED, font=ctk.CTkFont(**F10)).pack(anchor="w")
+        self.entry_prof_name = ctk.CTkEntry(f_name, textvariable=self.var_prof_name, height=28,
+                                            fg_color=PANEL, border_color=PANEL_BORDER, corner_radius=6, font=ctk.CTkFont(**F11))
+        self.entry_prof_name.pack(fill="x", pady=(2, 0))
+        self.entry_prof_name.bind("<Return>", lambda e: self._save_current_profile())
 
-        self.lbl_profile_email = ctk.CTkLabel(p_details, text="✉️ Google: --", text_color=TEXT, font=ctk.CTkFont(**F11))
-        self.lbl_profile_email.pack(side="left", padx=(0, 16), pady=4)
+        f_phone = ctk.CTkFrame(fields_box, fg_color="transparent")
+        f_phone.grid(row=0, column=1, sticky="ew", padx=4, pady=(6, 4))
+        ctk.CTkLabel(f_phone, text="📱 Numero WhatsApp", text_color=MUTED, font=ctk.CTkFont(**F10)).pack(anchor="w")
+        self.entry_prof_phone = ctk.CTkEntry(f_phone, textvariable=self.var_prof_phone, height=28,
+                                             fg_color=PANEL, border_color=PANEL_BORDER, corner_radius=6, font=ctk.CTkFont(**F11))
+        self.entry_prof_phone.pack(fill="x", pady=(2, 0))
+        self.entry_prof_phone.bind("<Return>", lambda e: self._save_current_profile())
 
-        self.lbl_profile_folder = ctk.CTkLabel(p_details, text="📁 Destinazione: --", text_color=MUTED, font=ctk.CTkFont(**F11))
-        self.lbl_profile_folder.pack(side="left", padx=(0, 12), pady=4)
+        f_gmail = ctk.CTkFrame(fields_box, fg_color="transparent")
+        f_gmail.grid(row=0, column=2, sticky="ew", padx=4, pady=(6, 4))
+        ctk.CTkLabel(f_gmail, text="✉️ Email Google (Gmail)", text_color=MUTED, font=ctk.CTkFont(**F10)).pack(anchor="w")
+        self.entry_prof_gmail = ctk.CTkEntry(f_gmail, textvariable=self.var_prof_gmail, height=28,
+                                             fg_color=PANEL, border_color=PANEL_BORDER, corner_radius=6, font=ctk.CTkFont(**F11))
+        self.entry_prof_gmail.pack(fill="x", pady=(2, 0))
+        self.entry_prof_gmail.bind("<Return>", lambda e: self._save_current_profile())
+
+        f_oauth = ctk.CTkFrame(fields_box, fg_color="transparent")
+        f_oauth.grid(row=0, column=3, sticky="ew", padx=(4, 8), pady=(6, 4))
+        ctk.CTkLabel(f_oauth, text="🔑 Token OAuth / Master Token", text_color=MUTED, font=ctk.CTkFont(**F10)).pack(anchor="w")
+        oauth_row = ctk.CTkFrame(f_oauth, fg_color="transparent")
+        oauth_row.pack(fill="x", pady=(2, 0))
+        self.entry_prof_oauth = ctk.CTkEntry(oauth_row, textvariable=self.var_prof_oauth, height=28, show="*",
+                                             fg_color=PANEL, border_color=PANEL_BORDER, corner_radius=6, font=ctk.CTkFont(**F11))
+        self.entry_prof_oauth.pack(side="left", fill="x", expand=True, padx=(0, 4))
+        self.entry_prof_oauth.bind("<Return>", lambda e: self._save_current_profile())
+        self.btn_toggle_oauth = ctk.CTkButton(oauth_row, text="👁️", width=32, height=28,
+                                              command=self._toggle_oauth_visibility,
+                                              fg_color=BUTTON_SEC, hover_color=BUTTON_SEC_HOVER, corner_radius=6)
+        self.btn_toggle_oauth.pack(side="right")
+
+        # Riga 1: Cartella di download dedicata + pulsante Sfoglia
+        f_dir = ctk.CTkFrame(fields_box, fg_color="transparent")
+        f_dir.grid(row=1, column=0, columnspan=4, sticky="ew", padx=8, pady=(2, 8))
+        f_dir.grid_columnconfigure(1, weight=1)
+
+        ctk.CTkLabel(f_dir, text="📁 Cartella Download:", text_color=MUTED, font=ctk.CTkFont(**F10)).grid(row=0, column=0, sticky="w", padx=(0, 8))
+        self.entry_prof_dir = ctk.CTkEntry(f_dir, textvariable=self.var_prof_dir, height=28,
+                                           fg_color=PANEL, border_color=PANEL_BORDER, corner_radius=6, font=ctk.CTkFont(**F11))
+        self.entry_prof_dir.grid(row=0, column=1, sticky="ew", padx=(0, 6))
+        self.entry_prof_dir.bind("<Return>", lambda e: self._save_current_profile())
+
+        ctk.CTkButton(f_dir, text="📁 Sfoglia...", width=95, height=28,
+                      command=self._browse_profile_folder,
+                      fg_color=BUTTON_SEC, hover_color=BUTTON_SEC_HOVER,
+                      corner_radius=6, font=ctk.CTkFont(**F11)).grid(row=0, column=2, sticky="e")
 
         # ===================================================================
         # Row 2: Schede principali dell'applicazione
@@ -1163,7 +1288,7 @@ class WhapaGUI(ctk.CTk):
                     "3. Clicca sulla scheda 'Archiviazione' (Storage).\n"
                     "4. Nel menu a sinistra espandi 'Cookie' e seleziona 'https://accounts.google.com'.\n"
                     "5. Cerca il cookie con nome 'oauth_token', fai doppio clic sul valore e copialo.\n"
-                    "6. Clicca su '✏️ Modifica' nella barra del profilo e incollalo nel campo 'Token OAuth'."
+                    "6. Incolla il token direttamente nel campo 'Token OAuth' sotto la tendina del profilo e premi 'Salva Modifiche'."
                 )
             else:
                 msg = (
@@ -1173,7 +1298,7 @@ class WhapaGUI(ctk.CTk):
                     "3. Clicca sulla scheda 'Applicazione' (Application).\n"
                     "4. Nel menu a sinistra espandi 'Cookie' e seleziona 'https://accounts.google.com'.\n"
                     "5. Cerca il cookie con nome 'oauth_token', fai doppio clic sul valore e copialo.\n"
-                    "6. Clicca su '✏️ Modifica' nella barra del profilo e incollalo nel campo 'Token OAuth'."
+                    "6. Incolla il token direttamente nel campo 'Token OAuth' sotto la tendina del profilo e premi 'Salva Modifiche'."
                 )
             messagebox.showinfo("Guida Estrazione Token Google", msg)
 
