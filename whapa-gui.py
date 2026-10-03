@@ -50,13 +50,85 @@ ctk.set_default_color_theme("green")
 FONT_FAMILY = "Segoe UI" if sys.platform.startswith("win") else "Helvetica"
 F10 = dict(family=FONT_FAMILY, size=10)
 F11 = dict(family=FONT_FAMILY, size=11)
+F11_BOLD = dict(family=FONT_FAMILY, size=11, weight="bold")
 F12 = dict(family=FONT_FAMILY, size=12)
 F12_BOLD = dict(family=FONT_FAMILY, size=12, weight="bold")
 F13_BOLD = dict(family=FONT_FAMILY, size=13, weight="bold")
 
+if sys.platform.startswith("win"):
+    import winreg
+
 
 def tool(name):
     return os.path.join(LIBS, name)
+
+
+def get_installed_browsers():
+    """Rileva automaticamente i browser installati sul PC."""
+    browsers = {"🌐 Predefinito di Sistema": ""}
+
+    if sys.platform.startswith("win"):
+        # 1. Ricerca nel Registro di Windows (HKCU e HKLM StartMenuInternet)
+        hives = [
+            (winreg.HKEY_CURRENT_USER, r"SOFTWARE\Clients\StartMenuInternet"),
+            (winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\Clients\StartMenuInternet"),
+        ]
+        for hive, subkey in hives:
+            try:
+                with winreg.OpenKey(hive, subkey) as key:
+                    num_subkeys = winreg.QueryInfoKey(key)[0]
+                    for i in range(num_subkeys):
+                        name = winreg.EnumKey(key, i)
+                        try:
+                            cmd_path = f"{subkey}\\{name}\\shell\\open\\command"
+                            with winreg.OpenKey(hive, cmd_path) as cmd_key:
+                                cmd_val, _ = winreg.QueryValue(cmd_key, "")
+                                exe_path = cmd_val.strip()
+                                if exe_path.startswith('"'):
+                                    exe_path = exe_path[1:].split('"')[0]
+                                else:
+                                    exe_path = exe_path.split(" ")[0]
+
+                                if os.path.isfile(exe_path):
+                                    display_name = name
+                                    try:
+                                        with winreg.OpenKey(hive, f"{subkey}\\{name}") as n_key:
+                                            d_val, _ = winreg.QueryValue(n_key, "")
+                                            if d_val:
+                                                display_name = d_val
+                                    except Exception:
+                                        pass
+                                    browsers[display_name] = exe_path
+                        except Exception:
+                            pass
+            except Exception:
+                pass
+
+        # 2. Controllo dei percorsi standard noti su disco
+        program_files = os.environ.get("ProgramFiles", r"C:\Program Files")
+        program_files_x86 = os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)")
+        local_app_data = os.environ.get("LocalAppData", "")
+
+        check_paths = [
+            ("Mozilla Firefox", os.path.join(program_files, "Mozilla Firefox", "firefox.exe")),
+            ("Mozilla Firefox", os.path.join(program_files_x86, "Mozilla Firefox", "firefox.exe")),
+            ("Google Chrome", os.path.join(program_files, "Google", "Chrome", "Application", "chrome.exe")),
+            ("Google Chrome", os.path.join(program_files_x86, "Google", "Chrome", "Application", "chrome.exe")),
+            ("Google Chrome", os.path.join(local_app_data, "Google", "Chrome", "Application", "chrome.exe")),
+            ("Microsoft Edge", os.path.join(program_files_x86, "Microsoft", "Edge", "Application", "msedge.exe")),
+            ("Microsoft Edge", os.path.join(program_files, "Microsoft", "Edge", "Application", "msedge.exe")),
+            ("Brave", os.path.join(program_files, "BraveSoftware", "Brave-Browser", "Application", "brave.exe")),
+            ("Brave", os.path.join(local_app_data, "BraveSoftware", "Brave-Browser", "Application", "brave.exe")),
+            ("Opera", os.path.join(local_app_data, "Programs", "Opera", "launcher.exe")),
+            ("Opera GX", os.path.join(local_app_data, "Programs", "Opera GX", "launcher.exe")),
+            ("Vivaldi", os.path.join(local_app_data, "Vivaldi", "Application", "vivaldi.exe")),
+        ]
+
+        for name, path in check_paths:
+            if path and os.path.isfile(path) and name not in browsers:
+                browsers[name] = path
+
+    return browsers
 
 
 class Field:
@@ -306,6 +378,25 @@ class WhapaGUI(ctk.CTk):
         self.q = queue.Queue()
         self.busy = False
         self.buttons = []
+
+        # Rilevamento automatico browser installati
+        self.installed_browsers = get_installed_browsers()
+        saved_browser = ""
+        cfg_path = os.path.join(APP_DIR, "cfg", "settings.cfg")
+        if os.path.exists(cfg_path):
+            try:
+                cfg = ConfigParser()
+                cfg.read(cfg_path, encoding="utf-8")
+                if cfg.has_option("gui", "browser"):
+                    saved_browser = cfg.get("gui", "browser").strip()
+            except Exception:
+                pass
+
+        default_browser = saved_browser if saved_browser in self.installed_browsers else (
+            "Mozilla Firefox" if "Mozilla Firefox" in self.installed_browsers else list(self.installed_browsers.keys())[0]
+        )
+        self.selected_browser = ctk.StringVar(value=default_browser)
+
         self._set_icon()
         self._build()
         self.after(10, self._maximizar)
@@ -449,12 +540,36 @@ class WhapaGUI(ctk.CTk):
     def _settings(self):
         SettingsDialog(self)
 
+    def _on_browser_changed(self, choice):
+        cfg_path = os.path.join(APP_DIR, "cfg", "settings.cfg")
+        try:
+            cfg = ConfigParser()
+            if os.path.exists(cfg_path):
+                cfg.read(cfg_path, encoding="utf-8")
+            if not cfg.has_section("gui"):
+                cfg.add_section("gui")
+            cfg.set("gui", "browser", choice)
+            with open(cfg_path, "w", encoding="utf-8") as f:
+                cfg.write(f)
+            self._emit(f"[-] Browser impostato su: {choice}", "ok")
+        except Exception:
+            pass
+
+    def open_url(self, url):
+        browser_name = self.selected_browser.get()
+        exe_path = self.installed_browsers.get(browser_name, "")
+        if exe_path and os.path.isfile(exe_path):
+            try:
+                subprocess.Popen([exe_path, url])
+                return
+            except Exception as e:
+                self._emit(f"[avviso] Impossibile avviare {browser_name}: {e}. Uso browser predefinito.", "err")
+        webbrowser.open(url)
+
     def _readme(self):
         ruta = os.path.join(APP_DIR, "README.md")
-        if os.path.exists(ruta):
-            webbrowser.open("file://" + os.path.abspath(ruta))
-        else:
-            webbrowser.open("https://github.com/Jinkazama75/whapa")
+        url = "file://" + os.path.abspath(ruta) if os.path.exists(ruta) else "https://github.com/Jinkazama75/whapa"
+        self.open_url(url)
 
     def _about(self):
         messagebox.showinfo(
@@ -474,18 +589,67 @@ class WhapaGUI(ctk.CTk):
         sc.pack(fill="both", expand=True, padx=6, pady=6)
         r = Row(sc)
 
-        # Banner informativo moderno
+        # Banner informativo moderno con selezione browser rilevato
         info_frame = ctk.CTkFrame(sc, fg_color=FIELD, corner_radius=10, border_color=PANEL_BORDER, border_width=1)
-        info_frame.grid(row=r.r, column=0, columnspan=4, sticky="ew", padx=12, pady=(4, 12))
-        ctk.CTkLabel(info_frame, text="💡 Connessione a Google Drive: le credenziali e il Master Token vengono letti da Impostazioni (cfg/settings.cfg).",
-                     text_color=TEXT, font=ctk.CTkFont(**F11)).pack(side="left", padx=12, pady=10)
+        info_frame.grid(row=r.r, column=0, columnspan=4, sticky="ew", padx=12, pady=(4, 14))
 
-        def apri_setup():
-            webbrowser.open("https://accounts.google.com/EmbeddedSetup")
+        top_info = ctk.CTkFrame(info_frame, fg_color="transparent")
+        top_info.pack(fill="x", padx=14, pady=(10, 4))
+        ctk.CTkLabel(top_info, text="💡 Connessione a Google Drive: le credenziali e il Master Token vengono gestiti in Impostazioni.",
+                     text_color=TEXT, font=ctk.CTkFont(**F11)).pack(side="left")
 
-        ctk.CTkButton(info_frame, text="🔑 Ottieni Token Google", width=160, height=28,
-                      command=apri_setup, fg_color=BUTTON_SEC_HOVER, hover_color=ACCENT_HOVER,
-                      corner_radius=6, font=ctk.CTkFont(**F11)).pack(side="right", padx=12, pady=8)
+        browser_bar = ctk.CTkFrame(info_frame, fg_color="transparent")
+        browser_bar.pack(fill="x", padx=14, pady=(4, 12))
+
+        ctk.CTkLabel(browser_bar, text="🌐 Browser:", text_color=ACCENT,
+                     font=ctk.CTkFont(**F12_BOLD)).pack(side="left", padx=(0, 6))
+
+        browser_dropdown = ctk.CTkOptionMenu(
+            browser_bar,
+            variable=self.selected_browser,
+            values=list(self.installed_browsers.keys()),
+            command=self._on_browser_changed,
+            width=210, height=30,
+            fg_color=BUTTON_SEC, button_color=BUTTON_SEC_HOVER,
+            button_hover_color=ACCENT_HOVER,
+            corner_radius=8, font=ctk.CTkFont(**F11),
+            dropdown_font=ctk.CTkFont(**F11)
+        )
+        browser_dropdown.pack(side="left", padx=(0, 10))
+
+        ctk.CTkButton(browser_bar, text="🔑 Apri Pagina Token (EmbeddedSetup)", width=230, height=30,
+                      command=lambda: self.open_url("https://accounts.google.com/EmbeddedSetup"),
+                      fg_color=ACCENT, hover_color=ACCENT_HOVER, text_color="#0B141A",
+                      corner_radius=8, font=ctk.CTkFont(**F12_BOLD)).pack(side="left", padx=(0, 8))
+
+        def mostra_guida_token():
+            b_name = self.selected_browser.get()
+            if "Firefox" in b_name:
+                msg = (
+                    "Procedura per Mozilla Firefox:\n\n"
+                    "1. Clicca su 'Apri Pagina Token' (si aprirà una scheda in Firefox).\n"
+                    "2. Premi F12 sulla tastiera per aprire gli strumenti sviluppatore.\n"
+                    "3. Clicca sulla scheda 'Archiviazione' (Storage).\n"
+                    "4. Nel menu a sinistra espandi 'Cookie' e seleziona 'https://accounts.google.com'.\n"
+                    "5. Cerca il cookie con nome 'oauth_token', fai doppio clic sul valore e copialo.\n"
+                    "6. Apri '⚙️ Impostazioni' qui in WhaPa e incollalo nel campo 'Token OAuth'."
+                )
+            else:
+                msg = (
+                    f"Procedura per {b_name}:\n\n"
+                    "1. Clicca su 'Apri Pagina Token' (si aprirà una scheda nel browser).\n"
+                    "2. Premi F12 sulla tastiera per aprire gli strumenti sviluppatore.\n"
+                    "3. Clicca sulla scheda 'Applicazione' (Application).\n"
+                    "4. Nel menu a sinistra espandi 'Cookie' e seleziona 'https://accounts.google.com'.\n"
+                    "5. Cerca il cookie con nome 'oauth_token', fai doppio clic sul valore e copialo.\n"
+                    "6. Apri '⚙️ Impostazioni' qui in WhaPa e incollalo nel campo 'Token OAuth'."
+                )
+            messagebox.showinfo("Guida Estrazione Token Google", msg)
+
+        ctk.CTkButton(browser_bar, text="❓ Come trovare il token", width=160, height=30,
+                      command=mostra_guida_token,
+                      fg_color=BUTTON_SEC, hover_color=BUTTON_SEC_HOVER,
+                      corner_radius=8, font=ctk.CTkFont(**F11)).pack(side="left")
         r.r += 1
 
         r.section("Parametri di Download da Google Drive")
