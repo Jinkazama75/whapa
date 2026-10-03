@@ -786,15 +786,59 @@ class WhapaGUI(ctk.CTk):
             self.profile_menu.configure(values=values)
             self.selected_profile_name.set(current_name)
 
-        if hasattr(self, "lbl_profile_folder") and act_prof:
-            out_d = act_prof.get("output_dir", "")
-            short_d = os.path.basename(out_d) if out_d else "Predefinita"
-            self.lbl_profile_folder.configure(text=f"📁 Destinazione: {short_d}")
+        if act_prof:
+            # Aggiorna il titolo della finestra con il profilo attivo
+            p_name = act_prof.get("name", "Profilo")
+            phone = act_prof.get("phone", "")
+            phone_str = f" (+{phone})" if phone else ""
+            self.title(f"WhaPa v{VERSION} - [Profilo: {p_name}{phone_str}] - Suite Forense & Backup WhatsApp")
 
-        if hasattr(self, "g_out") and act_prof:
-            p_out = act_prof.get("output_dir", "")
-            if p_out:
-                self.g_out.set(p_out)
+            # Aggiorna badge e campi informativi
+            if hasattr(self, "lbl_profile_phone"):
+                self.lbl_profile_phone.configure(text=f"📱 Telefono: {('+' + phone) if phone else 'Non specificato'}")
+
+            if hasattr(self, "lbl_profile_email"):
+                gmail = act_prof.get("gmail", "")
+                self.lbl_profile_email.configure(text=f"✉️ Google: {gmail if gmail else 'Non specificato'}")
+
+            out_d = act_prof.get("output_dir", "")
+            if hasattr(self, "lbl_profile_folder"):
+                self.lbl_profile_folder.configure(text=f"📁 Destinazione: {out_d if out_d else 'Predefinita'}")
+
+            if hasattr(self, "lbl_token_badge"):
+                has_token = bool(act_prof.get("oauth", "").strip())
+                if has_token:
+                    self.lbl_token_badge.configure(
+                        text="🟢 Token Google Configurato",
+                        fg_color=ACCENT_MUTED,
+                        text_color=ACCENT
+                    )
+                else:
+                    self.lbl_token_badge.configure(
+                        text="⚠️ Token Google Mancante",
+                        fg_color="#3B2A1A",
+                        text_color="#FFA726"
+                    )
+
+            if hasattr(self, "g_out"):
+                if out_d:
+                    self.g_out.set(out_d)
+
+    def _open_active_profile_folder(self):
+        act_prof = self.profile_manager.get_active_profile()
+        if not act_prof:
+            return
+        out_dir = act_prof.get("output_dir", "")
+        if not out_dir:
+            out_dir = os.path.join(APP_DIR, "downloads")
+        try:
+            os.makedirs(out_dir, exist_ok=True)
+            if sys.platform.startswith("win"):
+                os.startfile(out_dir)
+            else:
+                subprocess.Popen(["xdg-open", out_dir])
+        except Exception as e:
+            messagebox.showerror("WhaPa", f"Impossibile aprire la cartella: {e}")
 
     def _on_profile_dropdown_changed(self, choice):
         prof = self._find_profile_by_display_name(choice)
@@ -867,51 +911,81 @@ class WhapaGUI(ctk.CTk):
                           corner_radius=8, font=ctk.CTkFont(**F11)).pack(side="right", padx=4)
 
         # ===================================================================
-        # Row 1: Barra Gestione Profili Account (Sempre visibile)
+        # Row 1: Barra Gestione Profili Account (Sempre visibile in cima)
         # ===================================================================
         profile_frame = ctk.CTkFrame(self, fg_color=PANEL, corner_radius=10, border_color=PANEL_BORDER, border_width=1)
         profile_frame.grid(row=1, column=0, sticky="ew", padx=18, pady=(2, 6))
 
-        p_left = ctk.CTkFrame(profile_frame, fg_color="transparent")
-        p_left.pack(side="left", padx=14, pady=8)
+        # Riga 1: Selettore, pulsanti e indicatori
+        p_top = ctk.CTkFrame(profile_frame, fg_color="transparent")
+        p_top.pack(fill="x", padx=14, pady=(8, 4))
 
-        ctk.CTkLabel(p_left, text="👤 Profilo Account:", text_color=ACCENT,
+        p_top_left = ctk.CTkFrame(p_top, fg_color="transparent")
+        p_top_left.pack(side="left")
+
+        ctk.CTkLabel(p_top_left, text="👤 Profilo:", text_color=ACCENT,
                      font=ctk.CTkFont(**F12_BOLD)).pack(side="left", padx=(0, 8))
 
         self.profile_menu = ctk.CTkOptionMenu(
-            p_left,
+            p_top_left,
             variable=self.selected_profile_name,
             values=self._get_profile_display_names(),
             command=self._on_profile_dropdown_changed,
-            width=270, height=30,
+            width=260, height=30,
             fg_color=BUTTON_SEC, button_color=BUTTON_SEC_HOVER,
             button_hover_color=ACCENT_HOVER,
             corner_radius=8, font=ctk.CTkFont(**F11),
             dropdown_font=ctk.CTkFont(**F11)
         )
-        self.profile_menu.pack(side="left", padx=(0, 10))
+        self.profile_menu.pack(side="left", padx=(0, 8))
 
-        ctk.CTkButton(p_left, text="➕ Nuovo Profilo", width=125, height=30,
+        ctk.CTkButton(p_top_left, text="➕ Nuovo", width=85, height=30,
                       command=self._new_profile,
                       fg_color=ACCENT, hover_color=ACCENT_HOVER, text_color="#0B141A",
                       corner_radius=8, font=ctk.CTkFont(**F11_BOLD)).pack(side="left", padx=(0, 6))
 
-        ctk.CTkButton(p_left, text="✏️ Modifica", width=95, height=30,
+        ctk.CTkButton(p_top_left, text="✏️ Modifica", width=85, height=30,
                       command=self._edit_profile,
                       fg_color=BUTTON_SEC, hover_color=BUTTON_SEC_HOVER,
                       corner_radius=8, font=ctk.CTkFont(**F11)).pack(side="left", padx=(0, 6))
 
-        ctk.CTkButton(p_left, text="🗑️ Elimina", width=90, height=30,
+        ctk.CTkButton(p_top_left, text="🗑️ Elimina", width=80, height=30,
                       command=self._delete_profile,
                       fg_color=BUTTON_SEC, hover_color="#C62828", text_color="#FF8A80",
                       corner_radius=8, font=ctk.CTkFont(**F11)).pack(side="left")
 
-        p_right = ctk.CTkFrame(profile_frame, fg_color="transparent")
-        p_right.pack(side="right", padx=14, pady=8)
+        p_top_right = ctk.CTkFrame(p_top, fg_color="transparent")
+        p_top_right.pack(side="right")
 
-        self.lbl_profile_folder = ctk.CTkLabel(p_right, text="", text_color=MUTED,
-                                              font=ctk.CTkFont(**F11))
-        self.lbl_profile_folder.pack(side="right")
+        self.lbl_token_badge = ctk.CTkLabel(
+            p_top_right, text="🟢 Token Google Configurato",
+            fg_color=ACCENT_MUTED, text_color=ACCENT,
+            corner_radius=8, font=ctk.CTkFont(**F11_BOLD),
+            padx=10, pady=4
+        )
+        self.lbl_token_badge.pack(side="left", padx=(0, 8))
+
+        self.btn_open_profile_dir = ctk.CTkButton(
+            p_top_right, text="📂 Apri Cartella Media",
+            command=self._open_active_profile_folder,
+            width=150, height=30,
+            fg_color=BUTTON_SEC, hover_color=BUTTON_SEC_HOVER,
+            corner_radius=8, font=ctk.CTkFont(**F11)
+        )
+        self.btn_open_profile_dir.pack(side="left")
+
+        # Riga 2: Dettagli informativi del profilo attivo
+        p_details = ctk.CTkFrame(profile_frame, fg_color=FIELD, corner_radius=8)
+        p_details.pack(fill="x", padx=14, pady=(2, 8))
+
+        self.lbl_profile_phone = ctk.CTkLabel(p_details, text="📱 Telefono: --", text_color=TEXT, font=ctk.CTkFont(**F11))
+        self.lbl_profile_phone.pack(side="left", padx=(12, 16), pady=4)
+
+        self.lbl_profile_email = ctk.CTkLabel(p_details, text="✉️ Google: --", text_color=TEXT, font=ctk.CTkFont(**F11))
+        self.lbl_profile_email.pack(side="left", padx=(0, 16), pady=4)
+
+        self.lbl_profile_folder = ctk.CTkLabel(p_details, text="📁 Destinazione: --", text_color=MUTED, font=ctk.CTkFont(**F11))
+        self.lbl_profile_folder.pack(side="left", padx=(0, 12), pady=4)
 
         # ===================================================================
         # Row 2: Schede principali dell'applicazione
