@@ -2,14 +2,16 @@
 # -*- coding: utf-8 -*-
 """
 whapa-gui.py - Interfaccia grafica moderna per WhaPa (CustomTkinter)
-Traduzione completa in Italiano ed interfaccia ridisegnata.
+Traduzione completa in Italiano, design moderno e gestione profili multi-account.
 
 Autore originale: Ivan Moreno a.k.a B16f00t
-Edizione Italiana & Aggiornamenti: Jinkazama75
+Edizione Italiana & Gestione Profili: Jinkazama75
 """
 
 import os
 import sys
+import json
+import time
 import queue
 import shlex
 import threading
@@ -25,7 +27,8 @@ except ImportError:
 
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
 LIBS = os.path.join(APP_DIR, "libs")
-VERSION = "2.0.1"
+PROFILES_FILE = os.path.join(APP_DIR, "cfg", "profiles.json")
+VERSION = "2.1.0"
 
 # ===========================================================================
 #  Palette colori moderna (WhatsApp Dark Mode / Modern Slate)
@@ -68,7 +71,6 @@ def get_installed_browsers():
     browsers = {"🌐 Predefinito di Sistema": ""}
 
     if sys.platform.startswith("win"):
-        # 1. Ricerca nel Registro di Windows (HKCU e HKLM StartMenuInternet)
         hives = [
             (winreg.HKEY_CURRENT_USER, r"SOFTWARE\Clients\StartMenuInternet"),
             (winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\Clients\StartMenuInternet"),
@@ -104,7 +106,6 @@ def get_installed_browsers():
             except Exception:
                 pass
 
-        # 2. Controllo dei percorsi standard noti su disco
         program_files = os.environ.get("ProgramFiles", r"C:\Program Files")
         program_files_x86 = os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)")
         local_app_data = os.environ.get("LocalAppData", "")
@@ -131,6 +132,186 @@ def get_installed_browsers():
     return browsers
 
 
+# ===========================================================================
+#  Gestore Profili Multi-Account
+# ===========================================================================
+class ProfileManager:
+    """Gestisce profili multipli di account WhatsApp / Google con configurazioni separate."""
+
+    def __init__(self, settings_path=None):
+        self.settings_path = settings_path or os.path.join(APP_DIR, "cfg", "settings.cfg")
+        self.profiles_file = PROFILES_FILE
+        self.data = self._load()
+
+    def _load(self):
+        if os.path.exists(self.profiles_file):
+            try:
+                with open(self.profiles_file, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                    if isinstance(data, dict) and "profiles" in data and data["profiles"]:
+                        return data
+            except Exception:
+                pass
+        return self._migrate_from_settings()
+
+    def _migrate_from_settings(self):
+        gmail = ""
+        password = ""
+        oauth = ""
+        celnumbr = ""
+        android_id = "0000000000000000"
+
+        if os.path.exists(self.settings_path):
+            try:
+                cfg = ConfigParser()
+                cfg.read(self.settings_path, encoding="utf-8")
+                if cfg.has_section("google-auth"):
+                    gmail = cfg.get("google-auth", "gmail", fallback="").strip().strip('"')
+                    password = cfg.get("google-auth", "password", fallback="").strip().strip('"')
+                    oauth = cfg.get("google-auth", "oauth", fallback="").strip().strip('"')
+                    celnumbr = cfg.get("google-auth", "celnumbr", fallback="").strip().strip('"')
+                    android_id = cfg.get("google-auth", "android_id", fallback="0000000000000000").strip().strip('"')
+            except Exception:
+                pass
+
+        if not celnumbr:
+            try:
+                for item in os.listdir(APP_DIR):
+                    if item.isdigit() and len(item) >= 10:
+                        celnumbr = item
+                        break
+            except Exception:
+                pass
+
+        prof_id = "prof_1"
+        prof_name = "Principale"
+        cartella_nome = f"{prof_name}_{celnumbr}" if celnumbr else prof_name
+        dest_dir = os.path.join(APP_DIR, "downloads", cartella_nome)
+
+        initial_data = {
+            "active_profile_id": prof_id,
+            "profiles": [
+                {
+                    "id": prof_id,
+                    "name": prof_name,
+                    "phone": celnumbr,
+                    "gmail": gmail,
+                    "oauth": oauth,
+                    "password": password,
+                    "android_id": android_id,
+                    "output_dir": dest_dir
+                }
+            ]
+        }
+        self._save(initial_data)
+        self.sync_active_to_settings(initial_data)
+        return initial_data
+
+    def _save(self, data=None):
+        if data is not None:
+            self.data = data
+        try:
+            os.makedirs(os.path.dirname(self.profiles_file), exist_ok=True)
+            with open(self.profiles_file, "w", encoding="utf-8") as f:
+                json.dump(self.data, f, indent=2, ensure_ascii=False)
+        except Exception as e:
+            print(f"Errore salvataggio profili: {e}")
+
+    def get_profiles(self):
+        return self.data.get("profiles", [])
+
+    def get_active_profile(self):
+        act_id = self.data.get("active_profile_id")
+        for p in self.get_profiles():
+            if p.get("id") == act_id:
+                return p
+        profiles = self.get_profiles()
+        if profiles:
+            self.data["active_profile_id"] = profiles[0]["id"]
+            self._save()
+            return profiles[0]
+        return None
+
+    def set_active_profile(self, profile_id):
+        for p in self.get_profiles():
+            if p.get("id") == profile_id:
+                self.data["active_profile_id"] = profile_id
+                self._save()
+                self.sync_active_to_settings()
+                return p
+        return None
+
+    def save_profile(self, profile_dict):
+        prof_id = profile_dict.get("id")
+        profiles = self.get_profiles()
+        found = False
+        if prof_id:
+            for idx, p in enumerate(profiles):
+                if p.get("id") == prof_id:
+                    profiles[idx] = profile_dict
+                    found = True
+                    break
+        if not found:
+            new_id = f"prof_{int(time.time() * 1000)}"
+            profile_dict["id"] = new_id
+            profiles.append(profile_dict)
+            self.data["active_profile_id"] = new_id
+
+        self.data["profiles"] = profiles
+        self._save()
+        self.sync_active_to_settings()
+        return profile_dict
+
+    def delete_profile(self, profile_id):
+        profiles = self.get_profiles()
+        if len(profiles) <= 1:
+            return False, "Impossibile eliminare l'unico profilo rimanente."
+
+        new_profiles = [p for p in profiles if p.get("id") != profile_id]
+        if len(new_profiles) == len(profiles):
+            return False, "Profilo non trovato."
+
+        self.data["profiles"] = new_profiles
+        if self.data.get("active_profile_id") == profile_id:
+            self.data["active_profile_id"] = new_profiles[0]["id"]
+
+        self._save()
+        self.sync_active_to_settings()
+        return True, "Profilo eliminato con successo."
+
+    def sync_active_to_settings(self, data=None):
+        d = data or self.data
+        act_id = d.get("active_profile_id")
+        prof = None
+        for p in d.get("profiles", []):
+            if p.get("id") == act_id:
+                prof = p
+                break
+        if not prof:
+            return
+
+        try:
+            cfg = ConfigParser()
+            if os.path.exists(self.settings_path):
+                cfg.read(self.settings_path, encoding="utf-8")
+            if not cfg.has_section("google-auth"):
+                cfg.add_section("google-auth")
+
+            cfg.set("google-auth", "gmail", prof.get("gmail", ""))
+            cfg.set("google-auth", "password", prof.get("password", ""))
+            cfg.set("google-auth", "oauth", prof.get("oauth", ""))
+            cfg.set("google-auth", "celnumbr", prof.get("phone", ""))
+            cfg.set("google-auth", "android_id", prof.get("android_id", "0000000000000000"))
+
+            with open(self.settings_path, "w", encoding="utf-8") as f:
+                cfg.write(f)
+        except Exception as e:
+            print(f"Errore sincronizzazione settings.cfg: {e}")
+
+
+# ===========================================================================
+#  Widget Helper
+# ===========================================================================
 class Field:
     """Campo di testo con placeholder e interfaccia .get() / .set()."""
 
@@ -256,8 +437,136 @@ class Row:
         return b
 
 
+# ===========================================================================
+#  Finestra Modale Gestione Profilo
+# ===========================================================================
+class ProfileDialog(ctk.CTkToplevel):
+    """Finestra per creare o modificare un profilo account."""
+
+    def __init__(self, master, profile=None):
+        super().__init__(master)
+        self.master_gui = master
+        self.profile = profile or {}
+        self.is_edit = bool(profile and profile.get("id"))
+        self.title("Modifica Profilo Account" if self.is_edit else "Nuovo Profilo Account WhatsApp")
+        self.geometry("680x620")
+        self.configure(fg_color=BG)
+        self.transient(master)
+
+        self.var_name = ctk.StringVar(value=self.profile.get("name", ""))
+        self.var_phone = ctk.StringVar(value=self.profile.get("phone", ""))
+        self.var_gmail = ctk.StringVar(value=self.profile.get("gmail", ""))
+        self.var_oauth = ctk.StringVar(value=self.profile.get("oauth", ""))
+        self.var_pass = ctk.StringVar(value=self.profile.get("password", ""))
+        self.var_aid = ctk.StringVar(value=self.profile.get("android_id", "0000000000000000"))
+
+        default_dir = self.profile.get("output_dir", "")
+        if not default_dir:
+            default_dir = os.path.join(APP_DIR, "downloads")
+        self.var_dir = ctk.StringVar(value=default_dir)
+
+        self._build()
+        self.after(120, self.grab_set)
+
+    def _build(self):
+        sc = ctk.CTkScrollableFrame(self, fg_color="transparent")
+        sc.pack(fill="both", expand=True, padx=18, pady=18)
+        sc.grid_columnconfigure(1, weight=1)
+
+        ctk.CTkLabel(sc, text="👤 Configurazione Profilo Account", text_color=ACCENT,
+                     font=ctk.CTkFont(family=FONT_FAMILY, size=15, weight="bold")
+                     ).grid(row=0, column=0, columnspan=3, sticky="w", pady=(0, 14))
+
+        fields = [
+            ("Nome Profilo / Etichetta", self.var_name, "es. Personale, Lavoro, Mario Rossi", False),
+            ("Numero di Telefono WhatsApp", self.var_phone, "es. 393401234567 (con prefisso intl.)", False),
+            ("Account Google (Gmail)", self.var_gmail, "es. mario.rossi@gmail.com", False),
+            ("Token OAuth / Master Token", self.var_oauth, "Incolla il token (o lascialo gestire a WhaPa)", False),
+            ("Password Google (opzionale)", self.var_pass, "Opzionale o password per app", True),
+            ("Android ID (dispositivo)", self.var_aid, "0000000000000000", False),
+        ]
+
+        row_idx = 1
+        for label, var, ph, is_pwd in fields:
+            ctk.CTkLabel(sc, text=label, text_color=TEXT, anchor="w",
+                         font=ctk.CTkFont(**F12)).grid(row=row_idx, column=0, sticky="w", padx=(0, 10), pady=6)
+            show_char = "*" if is_pwd else ""
+            e = ctk.CTkEntry(sc, textvariable=var, fg_color=FIELD, border_color=FIELD_BORDER,
+                             border_width=1, corner_radius=8, show=show_char, placeholder_text=ph,
+                             font=ctk.CTkFont(**F12))
+            e.grid(row=row_idx, column=1, columnspan=2, sticky="ew", pady=6)
+            row_idx += 1
+
+        ctk.CTkLabel(sc, text="Cartella di Download Dedicata", text_color=TEXT, anchor="w",
+                     font=ctk.CTkFont(**F12)).grid(row=row_idx, column=0, sticky="w", padx=(0, 10), pady=6)
+
+        e_dir = ctk.CTkEntry(sc, textvariable=self.var_dir, fg_color=FIELD, border_color=FIELD_BORDER,
+                             border_width=1, corner_radius=8, font=ctk.CTkFont(**F12))
+        e_dir.grid(row=row_idx, column=1, sticky="ew", pady=6, padx=(0, 6))
+
+        def pick_folder():
+            p = filedialog.askdirectory(title="Seleziona cartella download per questo profilo")
+            if p:
+                self.var_dir.set(p)
+
+        ctk.CTkButton(sc, text="📁 Sfoglia", width=95, command=pick_folder,
+                      fg_color=BUTTON_SEC, hover_color=BUTTON_SEC_HOVER,
+                      corner_radius=8, font=ctk.CTkFont(**F11)).grid(row=row_idx, column=2, pady=6)
+        row_idx += 1
+
+        note = (
+            "💡 Informazione: Ogni profilo mantiene credenziali e una cartella dedicata per salvare i media.\n"
+            "Puoi creare un profilo per ciascun numero o account Google che gestisci."
+        )
+        ctk.CTkLabel(sc, text=note, text_color=MUTED, font=ctk.CTkFont(**F11), justify="left"
+                     ).grid(row=row_idx, column=0, columnspan=3, sticky="w", pady=(12, 14))
+
+        barra = ctk.CTkFrame(self, fg_color="transparent")
+        barra.pack(fill="x", padx=18, pady=(0, 14))
+
+        ctk.CTkButton(barra, text="💾 Salva Profilo", command=self._save_profile, width=150, height=36,
+                      fg_color=ACCENT, hover_color=ACCENT_HOVER, text_color="#0B141A",
+                      corner_radius=8, font=ctk.CTkFont(**F13_BOLD)).pack(side="right")
+        ctk.CTkButton(barra, text="Annulla", command=self.destroy, width=100, height=36,
+                      fg_color=BUTTON_SEC, hover_color=BUTTON_SEC_HOVER,
+                      corner_radius=8, font=ctk.CTkFont(**F12)).pack(side="right", padx=10)
+
+    def _save_profile(self):
+        nome = self.var_name.get().strip()
+        if not nome:
+            return messagebox.showwarning("Dati Mancanti", "Inserisci un nome o etichetta per il profilo (es. Personale, Lavoro).")
+
+        phone = self.var_phone.get().strip().replace("+", "").replace(" ", "").replace("-", "")
+        gmail = self.var_gmail.get().strip()
+        oauth = self.var_oauth.get().strip()
+        password = self.var_pass.get().strip()
+        aid = self.var_aid.get().strip() or "0000000000000000"
+        out_dir = self.var_dir.get().strip()
+        if not out_dir:
+            clean_nome = "".join(c for c in nome if c.isalnum() or c in ("_", "-"))
+            out_dir = os.path.join(APP_DIR, "downloads", f"{clean_nome}_{phone}" if phone else clean_nome)
+
+        p_data = {
+            "id": self.profile.get("id"),
+            "name": nome,
+            "phone": phone,
+            "gmail": gmail,
+            "oauth": oauth,
+            "password": password,
+            "android_id": aid,
+            "output_dir": out_dir
+        }
+        self.master_gui.profile_manager.save_profile(p_data)
+        self.master_gui._refresh_profile_ui()
+        self.master_gui._emit(f"[+] Profilo '{nome}' salvato con successo.", "ok")
+        self.destroy()
+
+
+# ===========================================================================
+#  Finestra Impostazioni Avanzate
+# ===========================================================================
 class SettingsDialog(ctk.CTkToplevel):
-    """Finestra di configurazione: dati del report e credenziali Google/iCloud."""
+    """Finestra di configurazione avanzata (report forense e credenziali globali)."""
 
     CAMPOS = [
         ("report", "company",   "Organizzazione / Studio"),
@@ -265,17 +574,17 @@ class SettingsDialog(ctk.CTkToplevel):
         ("report", "unit",      "Unità / Reparto"),
         ("report", "examiner",  "Operatore / Analista"),
         ("report", "notes",     "Note Aggiuntive"),
-        ("google-auth", "gmail",      "Indirizzo Gmail"),
-        ("google-auth", "oauth",      "Token OAuth / Master Token (da EmbeddedSetup)"),
-        ("google-auth", "celnumbr",   "Numero Telefono (es. 393401234567)"),
-        ("google-auth", "password",   "Password Google (opzionale / per app)"),
-        ("google-auth", "android_id", "Android ID (predefinito se non noto)"),
+        ("google-auth", "gmail",      "Indirizzo Gmail (Profilo Attivo)"),
+        ("google-auth", "oauth",      "Token OAuth / Master Token"),
+        ("google-auth", "celnumbr",   "Numero Telefono"),
+        ("google-auth", "password",   "Password Google (opzionale)"),
+        ("google-auth", "android_id", "Android ID"),
         ("icloud-auth", "icloud", "Account Apple iCloud"),
         ("icloud-auth", "passw",  "Password iCloud"),
     ]
     SECCIONI = {
         "report": "📋 Dati del Report Forense",
-        "google-auth": "☁️ Autenticazione Google Drive (WhatsApp Android)",
+        "google-auth": "☁️ Autenticazione Google Drive (Profilo Attivo)",
         "icloud-auth": "🍏 Autenticazione iCloud (WhatsApp iOS)",
     }
 
@@ -358,12 +667,27 @@ class SettingsDialog(ctk.CTkToplevel):
             os.makedirs(os.path.dirname(self.ruta), exist_ok=True)
             with open(self.ruta, "w", encoding="utf-8") as fh:
                 cfg.write(fh)
+
+            # Sincronizza anche il profilo attivo se i dati Google sono cambiati
+            act_prof = self.master_gui.profile_manager.get_active_profile()
+            if act_prof:
+                act_prof["gmail"] = self.vars.get(("google-auth", "gmail"), ctk.StringVar()).get()
+                act_prof["oauth"] = self.vars.get(("google-auth", "oauth"), ctk.StringVar()).get()
+                act_prof["phone"] = self.vars.get(("google-auth", "celnumbr"), ctk.StringVar()).get()
+                act_prof["password"] = self.vars.get(("google-auth", "password"), ctk.StringVar()).get()
+                act_prof["android_id"] = self.vars.get(("google-auth", "android_id"), ctk.StringVar()).get()
+                self.master_gui.profile_manager.save_profile(act_prof)
+                self.master_gui._refresh_profile_ui()
+
             self.master_gui._emit("[-] Impostazioni salvate con successo in cfg/settings.cfg", "ok")
             self.destroy()
         except OSError as e:
             messagebox.showerror("WhaPa", f"Errore durante il salvataggio: {e}")
 
 
+# ===========================================================================
+#  Finestra Principale WhaPa
+# ===========================================================================
 class WhapaGUI(ctk.CTk):
     def __init__(self):
         super().__init__()
@@ -372,12 +696,16 @@ class WhapaGUI(ctk.CTk):
             _sw, _sh = self.winfo_screenwidth(), self.winfo_screenheight()
         except Exception:
             _sw, _sh = 1280, 800
-        self.geometry(f"{min(1100, _sw - 20)}x{min(880, _sh - 80)}")
-        self.minsize(min(920, _sw - 40), min(660, _sh - 100))
+        self.geometry(f"{min(1140, _sw - 20)}x{min(900, _sh - 80)}")
+        self.minsize(min(960, _sw - 40), min(680, _sh - 100))
         self.configure(fg_color=BG)
         self.q = queue.Queue()
         self.busy = False
         self.buttons = []
+
+        # Inizializza Gestore Profili
+        self.profile_manager = ProfileManager()
+        self.selected_profile_name = ctk.StringVar()
 
         # Rilevamento automatico browser installati
         self.installed_browsers = get_installed_browsers()
@@ -399,6 +727,7 @@ class WhapaGUI(ctk.CTk):
 
         self._set_icon()
         self._build()
+        self._refresh_profile_ui()
         self.after(10, self._maximizar)
         self.after(100, self._drain)
 
@@ -426,16 +755,95 @@ class WhapaGUI(ctk.CTk):
         except Exception:
             pass
 
+    def _get_profile_display_names(self):
+        profiles = self.profile_manager.get_profiles()
+        res = []
+        for p in profiles:
+            res.append(self._get_display_name_for_profile(p))
+        return res if res else ["Nessun Profilo"]
+
+    def _get_display_name_for_profile(self, prof):
+        if not prof:
+            return ""
+        name = prof.get("name", "Senza Nome")
+        phone = prof.get("phone", "")
+        if phone:
+            return f"📱 {name} (+{phone})"
+        return f"📱 {name}"
+
+    def _find_profile_by_display_name(self, disp_name):
+        for p in self.profile_manager.get_profiles():
+            if self._get_display_name_for_profile(p) == disp_name:
+                return p
+        return None
+
+    def _refresh_profile_ui(self):
+        values = self._get_profile_display_names()
+        act_prof = self.profile_manager.get_active_profile()
+        current_name = self._get_display_name_for_profile(act_prof) if act_prof else (values[0] if values else "")
+
+        if hasattr(self, "profile_menu"):
+            self.profile_menu.configure(values=values)
+            self.selected_profile_name.set(current_name)
+
+        if hasattr(self, "lbl_profile_folder") and act_prof:
+            out_d = act_prof.get("output_dir", "")
+            short_d = os.path.basename(out_d) if out_d else "Predefinita"
+            self.lbl_profile_folder.configure(text=f"📁 Destinazione: {short_d}")
+
+        if hasattr(self, "g_out") and act_prof:
+            p_out = act_prof.get("output_dir", "")
+            if p_out:
+                self.g_out.set(p_out)
+
+    def _on_profile_dropdown_changed(self, choice):
+        prof = self._find_profile_by_display_name(choice)
+        if prof:
+            self.profile_manager.set_active_profile(prof["id"])
+            self._refresh_profile_ui()
+            num_str = f"+{prof.get('phone')}" if prof.get('phone') else "non impostato"
+            self._emit(f"[-] Profilo attivo selezionato: {prof['name']} (Numero: {num_str})", "ok")
+
+    def _new_profile(self):
+        ProfileDialog(self, profile={})
+
+    def _edit_profile(self):
+        act_prof = self.profile_manager.get_active_profile()
+        if not act_prof:
+            return messagebox.showwarning("WhaPa", "Nessun profilo selezionato.")
+        ProfileDialog(self, profile=dict(act_prof))
+
+    def _delete_profile(self):
+        act_prof = self.profile_manager.get_active_profile()
+        if not act_prof:
+            return
+        if len(self.profile_manager.get_profiles()) <= 1:
+            return messagebox.showwarning("WhaPa", "Non puoi eliminare l'unico profilo presente.")
+
+        nome = act_prof.get("name", "questo profilo")
+        if not messagebox.askyesno("Conferma Eliminazione", f"Sei sicuro di voler eliminare il profilo '{nome}'?"):
+            return
+
+        ok, msg = self.profile_manager.delete_profile(act_prof["id"])
+        if ok:
+            self._refresh_profile_ui()
+            self._emit(f"[-] {msg}", "ok")
+        else:
+            messagebox.showerror("WhaPa", msg)
+
     def _build(self):
         self.grid_columnconfigure(0, weight=1)
-        self.grid_rowconfigure(1, weight=1)
-        self.grid_rowconfigure(2, minsize=220)
+        self.grid_rowconfigure(0, weight=0)   # Header
+        self.grid_rowconfigure(1, weight=0)   # Profile Bar
+        self.grid_rowconfigure(2, weight=1)   # Tabs
+        self.grid_rowconfigure(3, minsize=210) # Console Log
 
-        # Intestazione superiore moderna
+        # ===================================================================
+        # Row 0: Intestazione superiore moderna
+        # ===================================================================
         head = ctk.CTkFrame(self, fg_color="transparent")
         head.grid(row=0, column=0, sticky="ew", padx=18, pady=(14, 6))
 
-        # Brand / Titolo
         brand_box = ctk.CTkFrame(head, fg_color="transparent")
         brand_box.pack(side="left")
 
@@ -450,7 +858,6 @@ class WhapaGUI(ctk.CTk):
         ctk.CTkLabel(brand_box, text="Suite Forense & Download Backup WhatsApp",
                      text_color=MUTED, font=ctk.CTkFont(**F12)).pack(side="left")
 
-        # Barra strumenti in alto a destra
         for txt, cmd in (("ℹ️ Informazioni", self._about),
                          ("📖 Manuale", self._readme),
                          ("📦 Dipendenze", self._install_deps),
@@ -459,13 +866,62 @@ class WhapaGUI(ctk.CTk):
                           fg_color=BUTTON_SEC, hover_color=BUTTON_SEC_HOVER,
                           corner_radius=8, font=ctk.CTkFont(**F11)).pack(side="right", padx=4)
 
-        # Schede principali dell'applicazione
+        # ===================================================================
+        # Row 1: Barra Gestione Profili Account (Sempre visibile)
+        # ===================================================================
+        profile_frame = ctk.CTkFrame(self, fg_color=PANEL, corner_radius=10, border_color=PANEL_BORDER, border_width=1)
+        profile_frame.grid(row=1, column=0, sticky="ew", padx=18, pady=(2, 6))
+
+        p_left = ctk.CTkFrame(profile_frame, fg_color="transparent")
+        p_left.pack(side="left", padx=14, pady=8)
+
+        ctk.CTkLabel(p_left, text="👤 Profilo Account:", text_color=ACCENT,
+                     font=ctk.CTkFont(**F12_BOLD)).pack(side="left", padx=(0, 8))
+
+        self.profile_menu = ctk.CTkOptionMenu(
+            p_left,
+            variable=self.selected_profile_name,
+            values=self._get_profile_display_names(),
+            command=self._on_profile_dropdown_changed,
+            width=270, height=30,
+            fg_color=BUTTON_SEC, button_color=BUTTON_SEC_HOVER,
+            button_hover_color=ACCENT_HOVER,
+            corner_radius=8, font=ctk.CTkFont(**F11),
+            dropdown_font=ctk.CTkFont(**F11)
+        )
+        self.profile_menu.pack(side="left", padx=(0, 10))
+
+        ctk.CTkButton(p_left, text="➕ Nuovo Profilo", width=125, height=30,
+                      command=self._new_profile,
+                      fg_color=ACCENT, hover_color=ACCENT_HOVER, text_color="#0B141A",
+                      corner_radius=8, font=ctk.CTkFont(**F11_BOLD)).pack(side="left", padx=(0, 6))
+
+        ctk.CTkButton(p_left, text="✏️ Modifica", width=95, height=30,
+                      command=self._edit_profile,
+                      fg_color=BUTTON_SEC, hover_color=BUTTON_SEC_HOVER,
+                      corner_radius=8, font=ctk.CTkFont(**F11)).pack(side="left", padx=(0, 6))
+
+        ctk.CTkButton(p_left, text="🗑️ Elimina", width=90, height=30,
+                      command=self._delete_profile,
+                      fg_color=BUTTON_SEC, hover_color="#C62828", text_color="#FF8A80",
+                      corner_radius=8, font=ctk.CTkFont(**F11)).pack(side="left")
+
+        p_right = ctk.CTkFrame(profile_frame, fg_color="transparent")
+        p_right.pack(side="right", padx=14, pady=8)
+
+        self.lbl_profile_folder = ctk.CTkLabel(p_right, text="", text_color=MUTED,
+                                              font=ctk.CTkFont(**F11))
+        self.lbl_profile_folder.pack(side="right")
+
+        # ===================================================================
+        # Row 2: Schede principali dell'applicazione
+        # ===================================================================
         self.tabs = ctk.CTkTabview(self, fg_color=PANEL, segmented_button_fg_color=FIELD,
                                    segmented_button_selected_color=ACCENT,
                                    segmented_button_selected_hover_color=ACCENT_HOVER,
                                    segmented_button_unselected_hover_color=BUTTON_SEC_HOVER,
                                    corner_radius=12)
-        self.tabs.grid(row=1, column=0, sticky="nsew", padx=18, pady=6)
+        self.tabs.grid(row=2, column=0, sticky="nsew", padx=18, pady=4)
 
         tab_names = (
             "📥 Google Drive (WhaGoDri)",
@@ -485,9 +941,11 @@ class WhapaGUI(ctk.CTk):
         self._tab_whamerge(self.tabs.tab("🔀 Unisci Database (WhaMerge)"))
         self._tab_whacloud(self.tabs.tab("☁️ iCloud (WhaCloud)"))
 
-        # Pannello inferiore (Output / Console Log)
+        # ===================================================================
+        # Row 3: Pannello inferiore (Output / Console Log)
+        # ===================================================================
         bottom = ctk.CTkFrame(self, fg_color=PANEL, corner_radius=12, border_color=PANEL_BORDER, border_width=1)
-        bottom.grid(row=2, column=0, sticky="nsew", padx=18, pady=(6, 14))
+        bottom.grid(row=3, column=0, sticky="nsew", padx=18, pady=(4, 14))
         bottom.grid_columnconfigure(0, weight=1)
         bottom.grid_rowconfigure(1, weight=1)
 
@@ -512,7 +970,7 @@ class WhapaGUI(ctk.CTk):
         self.log.tag_config("ok", foreground=ACCENT)
         self.log.tag_config("err", foreground=ERROR)
         self.log.tag_config("cmd", foreground=MUTED)
-        self._emit("Pronto. Scegli un'operazione, imposta i parametri e clicca sul pulsante di avvio.", "cmd")
+        self._emit("Pronto. Seleziona il profilo desiderato e avvia l'operazione.", "cmd")
 
     # ------------------------------------------------------------------
     #  Barra strumenti superiore
@@ -576,7 +1034,7 @@ class WhapaGUI(ctk.CTk):
             f"WhaPa {VERSION}",
             f"WhaPa v{VERSION} - Suite Forense WhatsApp (Android & iOS)\n\n"
             "Interfaccia utente interamente localizzata in Italiano.\n"
-            "Supporto per download backup Google Drive ed estrazione dati.\n\n"
+            "Supporto per profili account multipli e download backup Google Drive.\n\n"
             "Repository: https://github.com/Jinkazama75/whapa\n"
             "Licenza: GPL-3.0"
         )
@@ -589,13 +1047,12 @@ class WhapaGUI(ctk.CTk):
         sc.pack(fill="both", expand=True, padx=6, pady=6)
         r = Row(sc)
 
-        # Banner informativo moderno con selezione browser rilevato
         info_frame = ctk.CTkFrame(sc, fg_color=FIELD, corner_radius=10, border_color=PANEL_BORDER, border_width=1)
         info_frame.grid(row=r.r, column=0, columnspan=4, sticky="ew", padx=12, pady=(4, 14))
 
         top_info = ctk.CTkFrame(info_frame, fg_color="transparent")
         top_info.pack(fill="x", padx=14, pady=(10, 4))
-        ctk.CTkLabel(top_info, text="💡 Connessione a Google Drive: le credenziali e il Master Token vengono gestiti in Impostazioni.",
+        ctk.CTkLabel(top_info, text="💡 Connessione a Google Drive: le credenziali del profilo attivo sono sincronizzate automaticamente.",
                      text_color=TEXT, font=ctk.CTkFont(**F11)).pack(side="left")
 
         browser_bar = ctk.CTkFrame(info_frame, fg_color="transparent")
@@ -632,7 +1089,7 @@ class WhapaGUI(ctk.CTk):
                     "3. Clicca sulla scheda 'Archiviazione' (Storage).\n"
                     "4. Nel menu a sinistra espandi 'Cookie' e seleziona 'https://accounts.google.com'.\n"
                     "5. Cerca il cookie con nome 'oauth_token', fai doppio clic sul valore e copialo.\n"
-                    "6. Apri '⚙️ Impostazioni' qui in WhaPa e incollalo nel campo 'Token OAuth'."
+                    "6. Clicca su '✏️ Modifica' nella barra del profilo e incollalo nel campo 'Token OAuth'."
                 )
             else:
                 msg = (
@@ -642,7 +1099,7 @@ class WhapaGUI(ctk.CTk):
                     "3. Clicca sulla scheda 'Applicazione' (Application).\n"
                     "4. Nel menu a sinistra espandi 'Cookie' e seleziona 'https://accounts.google.com'.\n"
                     "5. Cerca il cookie con nome 'oauth_token', fai doppio clic sul valore e copialo.\n"
-                    "6. Apri '⚙️ Impostazioni' qui in WhaPa e incollalo nel campo 'Token OAuth'."
+                    "6. Clicca su '✏️ Modifica' nella barra del profilo e incollalo nel campo 'Token OAuth'."
                 )
             messagebox.showinfo("Guida Estrazione Token Google", msg)
 
@@ -672,9 +1129,11 @@ class WhapaGUI(ctk.CTk):
         self.g_file = Field()
         r.entry("File remoto specifico", self.g_file, "Percorso file (solo per 'Scarica un singolo file')", width=320)
 
-        self.g_out = Field()
+        act_prof = self.profile_manager.get_active_profile()
+        initial_out = act_prof.get("output_dir", "") if act_prof else ""
+        self.g_out = Field(initial_out)
         r.file("Cartella di destinazione", self.g_out, "Cartella dove salvare i media", folder=True,
-               hint="Cartella locale sul PC dove salvare i download")
+               hint="Cartella locale sul PC dove salvare i download del profilo")
 
         self.g_threads = Field("12")
         r.entry("Thread simultanei", self.g_threads, "12", width=100)
@@ -707,8 +1166,15 @@ class WhapaGUI(ctk.CTk):
             a += ["-p", self.g_file.get()]
         else:
             a.append(mapa.get(acc, "-i"))
-        if self.g_out.get():
-            a += ["-o", self.g_out.get()]
+
+        out_path = self.g_out.get().strip()
+        if not out_path:
+            act_prof = self.profile_manager.get_active_profile()
+            if act_prof and act_prof.get("output_dir"):
+                out_path = act_prof.get("output_dir")
+        if out_path:
+            a += ["-o", out_path]
+
         if self.g_np.get():
             a.append("-np")
         if self.g_dry.get():

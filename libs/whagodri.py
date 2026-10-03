@@ -63,6 +63,19 @@ class WaBackup:
                         config['google-auth']['oauth'] = master_token
                         config.write()
                         print("[+] Saved master token to cfg/settings.cfg for faster access next time.")
+
+                        prof_file = r'{}/cfg/profiles.json'.format(whapa_path).replace("/", os.path.sep)
+                        if os.path.isfile(prof_file):
+                            with open(prof_file, "r", encoding="utf-8") as pf:
+                                pdata = json.load(pf)
+                            act_id = pdata.get("active_profile_id")
+                            for p in pdata.get("profiles", []):
+                                if p.get("id") == act_id:
+                                    p["oauth"] = master_token
+                                    break
+                            with open(prof_file, "w", encoding="utf-8") as pf:
+                                json.dump(pdata, pf, indent=2, ensure_ascii=False)
+                            print("[+] Master token aggiornato anche nel profilo attivo.")
                     except Exception as e:
                         pass
                 else:

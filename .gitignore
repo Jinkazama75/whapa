@@ -2,6 +2,9 @@ __pycache__/
 *.py[cod]
 *$py.class
 cfg/settings.cfg
+cfg/profiles.json
+downloads/
+[0-9]*/
 .env
 .venv/
 env/
